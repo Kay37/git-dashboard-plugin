@@ -1,6 +1,7 @@
 package dev.gitdashboard.toolwindow
 
 import com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.CustomShortcutSet
@@ -174,7 +175,14 @@ class CommitSection(
             override fun onSuccess() {
                 val files = pluralize(included.size, "file")
                 if (push) notifyUser(project, NotificationType.INFORMATION, "Committed and pushed", "$files pushed to ${pushedTo.joinToString()}")
-                else notifyUser(project, NotificationType.INFORMATION, "Committed", "$files committed. Push when you're ready.")
+                else notifyUser(
+                    project, NotificationType.INFORMATION, "Committed", "$files committed. Push when you're ready.",
+                    actions = listOf(NotificationAction.createSimpleExpiring("Push") {
+                        val repos = changesByRepo.keys
+                        if (repos.size == 1) pushWithChoice(project, repos.single(), onGitStateChanged)
+                        else pushInBackground(project, repos, onGitStateChanged)
+                    }),
+                )
             }
 
             override fun onThrowable(error: Throwable) {

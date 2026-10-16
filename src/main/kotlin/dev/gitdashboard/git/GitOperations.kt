@@ -37,13 +37,32 @@ fun commitFiles(project: Project, repo: GitRepository, files: Collection<FilePat
     afterRepoChanged(project, repo)
 }
 
+data class UnpushedCommit(val hash: String, val shortHash: String, val subject: String, val relativeDate: String)
+
+/**
+ * Commits on the current branch that aren't on its upstream yet, newest first. For a branch
+ * that was never pushed, that's every commit not on any remote branch.
+ */
+fun listUnpushedCommits(project: Project, repo: GitRepository): List<UnpushedCommit> {
+    val branch = repo.currentBranch ?: return emptyList()
+    val range = if (GitBranchUtil.getTrackInfoForBranch(repo, branch) != null) arrayOf("@{upstream}..HEAD")
+                else arrayOf("HEAD", "--not", "--remotes")
+    return runGit(project, repo, GitCommand.LOG, "--format=%H%x1f%h%x1f%s%x1f%ar", *range).output
+        .mapNotNull { line ->
+            val parts = line.split('\u001f')
+            if (parts.size < 4) null else UnpushedCommit(parts[0], parts[1], parts[2], parts[3])
+        }
+}
+
 /**
  * Pushes the current branch to its upstream. A branch that has never been pushed is published
  * to the default remote under the same name and set to track it.
  *
+ * @param upToCommit push only this commit and the commits before it; null pushes the whole branch.
+ *   Git can't push a commit without its ancestors, so "up to" is the only kind of partial push.
  * @return the remote branch pushed to, e.g. "origin/main".
  */
-fun pushCurrentBranch(project: Project, repo: GitRepository): String {
+fun pushCurrentBranch(project: Project, repo: GitRepository, upToCommit: String? = null): String {
     val branch = repo.currentBranch
         ?: throw GitOperationException("You're not on a branch (detached HEAD), so there is nothing to push.")
     val trackInfo = GitBranchUtil.getTrackInfoForBranch(repo, branch)
@@ -54,12 +73,17 @@ fun pushCurrentBranch(project: Project, repo: GitRepository): String {
         ?: throw GitOperationException("The remote '${remote.name}' has no URL.")
     val remoteBranchName = trackInfo?.remoteBranch?.nameForRemoteOperations ?: branch.name
 
+    val source = upToCommit ?: "refs/heads/${branch.name}"
     val result = Git.getInstance().push(
         repo, remote.name, url,
-        "refs/heads/${branch.name}:refs/heads/$remoteBranchName",
+        "$source:refs/heads/$remoteBranchName",
         /* updateTracking = */ trackInfo == null,
     )
     if (!result.success()) throw GitOperationException(explainPushFailure(result))
+    if (trackInfo == null && upToCommit != null) {
+        // --set-upstream only applies when pushing a branch name, not a commit hash.
+        runGit(project, repo, GitCommand.BRANCH, "--set-upstream-to=${remote.name}/$remoteBranchName", branch.name)
+    }
 
     afterRepoChanged(project, repo)
     return "${remote.name}/$remoteBranchName"

@@ -123,7 +123,12 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             icon(AllIcons.Vcs.Branch)
             label(status.branch ?: "Detached at ${status.detachedAt ?: "unknown"}").bold()
         }
-        row { secondaryLabel(syncText(status)) }
+        row {
+            secondaryLabel(syncText(status))
+            if (status.hasUnpushedCommits) {
+                link(if (status.upstream == null) "Publish" else "Push") { pushWithChoice(project, status.repository, ::requestRefresh) }
+            }
+        }
     }
 
     private fun Row.secondaryLabel(text: String) =
@@ -143,27 +148,38 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         val refresh = object : DumbAwareAction("Refresh", "Reload Git status", AllIcons.Actions.Refresh) {
             override fun actionPerformed(e: AnActionEvent) = requestRefresh()
         }
+        val push = object : DumbAwareAction("Push", "Push unpushed commits on the current branch", AllIcons.Vcs.Push) {
+            override fun getActionUpdateThread() = ActionUpdateThread.BGT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = statuses.any { it.hasUnpushedCommits }
+            }
+            override fun actionPerformed(e: AnActionEvent) =
+                chooseRepo("Push", statuses.filter { it.hasUnpushedCommits }.map { it.repository }) {
+                    pushWithChoice(project, it, ::requestRefresh)
+                }
+        }
         val undo = object : DumbAwareAction("Undo Last Commit", "Remove the latest unpushed commit and keep its changes", AllIcons.Actions.Rollback) {
             override fun getActionUpdateThread() = ActionUpdateThread.BGT
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = statuses.any { it.hasUnpushedCommits }
             }
-            override fun actionPerformed(e: AnActionEvent) = chooseRepoAndUndo()
+            override fun actionPerformed(e: AnActionEvent) =
+                chooseRepo("Undo Last Commit", statuses.filter { it.hasUnpushedCommits }.map { it.repository }, ::confirmAndUndo)
         }
-        val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", DefaultActionGroup(refresh, undo), true)
+        val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", DefaultActionGroup(refresh, push, undo), true)
         toolbar.targetComponent = this
         return toolbar.component
     }
 
-    private fun chooseRepoAndUndo() {
-        val candidates = statuses.filter { it.hasUnpushedCommits }.map { it.repository }
+    /** Runs [action] on the only candidate, or asks which repository when the project has several. */
+    private fun chooseRepo(actionName: String, candidates: List<GitRepository>, action: (GitRepository) -> Unit) {
         when (candidates.size) {
             0 -> return
-            1 -> confirmAndUndo(candidates.single())
+            1 -> action(candidates.single())
             else -> JBPopupFactory.getInstance()
                 .createPopupChooserBuilder(candidates.map { it.root.name })
-                .setTitle("Undo Last Commit In")
-                .setItemChosenCallback { name -> candidates.find { it.root.name == name }?.let(::confirmAndUndo) }
+                .setTitle("$actionName In")
+                .setItemChosenCallback { name -> candidates.find { it.root.name == name }?.let(action) }
                 .createPopup()
                 .showInCenterOf(this)
         }
