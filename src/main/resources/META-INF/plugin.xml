@@ -22,5 +22,6 @@
                     anchor="right"
                     icon="AllIcons.Vcs.Branch"
                     factoryClass="dev.gitdashboard.toolwindow.GitDashboardToolWindowFactory"/>
+        <notificationGroup id="Git Dashboard" displayType="BALLOON"/>
     </extensions>
 </idea-plugin>
