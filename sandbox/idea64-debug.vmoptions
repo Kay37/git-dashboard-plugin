@@ -1,5 +1,8 @@
 # Added on top of IntelliJ's own bin/idea64.exe.vmoptions by "mvn exec:exec@run-ide / debug-ide".
 # Internal mode enables Tools > Internal Actions (UI Inspector etc.), handy for plugin work.
 -Didea.is.internal=true
+# The test IDE hit a JVM-internal crash ("Node hash code has changed", JBR 25) on 2026-10-16.
+# Compact object headers are a newer JVM feature and a likely trigger, so they are turned off here.
+-XX:-UseCompactObjectHeaders
 # Lets a "Remote JVM Debug" run configuration attach on localhost:5005.
 -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=localhost:5005

@@ -12,8 +12,11 @@ import com.intellij.openapi.editor.InlayProperties
 import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
+import com.intellij.openapi.editor.event.EditorMouseEventArea
 import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.editor.event.EditorMouseMotionListener
+import com.intellij.openapi.editor.event.VisibleAreaEvent
+import com.intellij.openapi.editor.event.VisibleAreaListener
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.RangeHighlighter
@@ -41,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Color
 import java.awt.Cursor
+import java.awt.event.MouseEvent
 
 /**
  * Draws the editor decorations for the line under the caret: the blame text at the end of the
@@ -60,7 +64,19 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         val multicaster = EditorFactory.getInstance().eventMulticaster
         multicaster.addCaretListener(object : CaretListener {
             override fun caretPositionChanged(event: CaretEvent) {
-                if (event.editor.project == project) updates.tryEmit(event.editor)
+                if (event.editor.project != project) return
+                // Typing moves the line end; re-measure now so the pill doesn't drift until the next update.
+                realign(event.editor)
+                updates.tryEmit(event.editor)
+            }
+        }, this)
+        multicaster.addVisibleAreaListener(object : VisibleAreaListener {
+            override fun visibleAreaChanged(e: VisibleAreaEvent) {
+                // Only horizontal changes (resize, sideways scroll) move the right-aligned pill.
+                val old = e.oldRectangle
+                if (e.editor.project == project && (old == null || old.x != e.newRectangle.x || old.width != e.newRectangle.width)) {
+                    realign(e.editor)
+                }
             }
         }, this)
         multicaster.addEditorMouseMotionListener(object : EditorMouseMotionListener {
@@ -120,14 +136,35 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
             BlameLine.Uncommitted -> described
         }
 
+        // The whole-commit tint is on demand (double-click or shortcut) and lasts while the caret
+        // stays on that commit's lines; moving to another commit's line drops it.
+        val hash = (blame as? BlameLine.Committed)?.hash
+        if (editor.getUserData(HIGHLIGHT_REQUESTED) == true) {
+            editor.putUserData(HIGHLIGHT_REQUESTED, null)
+            editor.putUserData(HIGHLIGHTED_COMMIT, hash)
+        }
+        else if (editor.getUserData(HIGHLIGHTED_COMMIT) != hash) {
+            editor.putUserData(HIGHLIGHTED_COMMIT, null)
+        }
+
         showInlay(editor, caretLine, blame)
-        showSameCommitLines(editor, annotation, lines, blame)
+        showSameCommitLines(editor, annotation, lines, editor.getUserData(HIGHLIGHTED_COMMIT))
+    }
+
+    /** Lights up every line of the caret line's commit, or turns that off if it's already on. Call on the EDT. */
+    fun toggleCommitHighlight(editor: Editor) {
+        if (editor.getUserData(HIGHLIGHTED_COMMIT) != null) editor.putUserData(HIGHLIGHTED_COMMIT, null)
+        else editor.putUserData(HIGHLIGHT_REQUESTED, true)
+        update(editor)
     }
 
     private fun showInlay(editor: Editor, line: Int, blame: BlameLine) {
         val existing = editor.getUserData(INLAY)
         if (BlameSettings.inlineBlame && existing != null && existing.isValid &&
-            editor.document.getLineNumber(existing.offset) == line && existing.renderer.blame == blame) return
+            editor.document.getLineNumber(existing.offset) == line && existing.renderer.blame == blame) {
+            existing.update()
+            return
+        }
 
         existing?.let(Disposer::dispose)
         editor.putUserData(INLAY, null)
@@ -138,10 +175,9 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.putUserData(INLAY, inlay)
     }
 
-    /** Tints (and marks on the scrollbar) every line that belongs to the caret line's commit. */
-    private fun showSameCommitLines(editor: Editor, annotation: GitFileAnnotation?, lines: UpToDateLineNumberProviderImpl, blame: BlameLine) {
+    /** Tints (and marks on the scrollbar) every line that belongs to commit [hash]; null clears the tint. */
+    private fun showSameCommitLines(editor: Editor, annotation: GitFileAnnotation?, lines: UpToDateLineNumberProviderImpl, hash: String?) {
         val document = editor.document
-        val hash = (blame as? BlameLine.Committed)?.hash
         val key = hash?.let { "$it@${document.modificationStamp}" }
         val existing = editor.getUserData(COMMIT_LINES)
         if (BlameSettings.commitLineMarks && existing != null && existing.key == key) return
@@ -168,11 +204,18 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.putUserData(COMMIT_LINES, CommitLines(key!!, highlighters))
     }
 
+    /** Re-measures the blame pill's position (its width depends on the line end and window size). */
+    private fun realign(editor: Editor) {
+        editor.getUserData(INLAY)?.takeIf { it.isValid }?.update()
+    }
+
     private fun clear(editor: Editor) {
         editor.getUserData(INLAY)?.let(Disposer::dispose)
         editor.putUserData(INLAY, null)
         editor.getUserData(COMMIT_LINES)?.highlighters?.forEach { editor.markupModel.removeHighlighter(it) }
         editor.putUserData(COMMIT_LINES, null)
+        editor.putUserData(HIGHLIGHTED_COMMIT, null)
+        editor.putUserData(HIGHLIGHT_REQUESTED, null)
     }
 
     private fun blameUnderMouse(e: EditorMouseEvent): BlameLine.Committed? =
@@ -186,6 +229,14 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
 
     private fun onClick(e: EditorMouseEvent) {
         if (e.editor.project != project) return
+        // Double-clicking code lights up its commit. Not consumed, so the word still gets selected.
+        if (e.mouseEvent.clickCount == 2 && e.mouseEvent.button == MouseEvent.BUTTON1 &&
+            e.area == EditorMouseEventArea.EDITING_AREA && e.inlay == null) {
+            e.editor.putUserData(HIGHLIGHTED_COMMIT, null)
+            e.editor.putUserData(HIGHLIGHT_REQUESTED, true)
+            update(e.editor)
+            return
+        }
         val blame = blameUnderMouse(e) ?: return
         val file = FileDocumentManager.getInstance().getFile(e.editor.document) ?: return
         val repo = GitRepositoryManager.getInstance(project).getRepositoryForFileQuick(file) ?: return
@@ -202,6 +253,10 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
     private companion object {
         val INLAY = Key.create<Inlay<BlameInlayRenderer>>("gitDashboard.blameInlay")
         val COMMIT_LINES = Key.create<CommitLines>("gitDashboard.sameCommitLines")
+        /** Commit whose lines are lit up on request, while the caret stays on it. */
+        val HIGHLIGHTED_COMMIT = Key.create<String>("gitDashboard.highlightedCommit")
+        /** Set by a double-click or the shortcut; the next update resolves it to the caret line's commit. */
+        val HIGHLIGHT_REQUESTED = Key.create<Boolean>("gitDashboard.highlightRequested")
 
         /** Scanning every line on each caret move is cheap for normal files; skip huge ones. */
         const val MAX_LINES_FOR_MARKS = 5000

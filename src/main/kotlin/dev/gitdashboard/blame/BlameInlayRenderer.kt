@@ -3,6 +3,7 @@ package dev.gitdashboard.blame
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.editor.markup.TextAttributes
@@ -27,10 +28,24 @@ import java.awt.RenderingHints
  */
 class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
 
+    /**
+     * The inlay starts where the line's text ends; its width includes the empty space before the
+     * pill, so the pill can sit at the right-margin guide instead of right after the code.
+     */
     override fun calcWidthInPixels(inlay: Inlay<*>): Int {
-        val fonts = Fonts(inlay.editor)
-        val pill = pillWidth(fonts, pillHeight(inlay.editor.lineHeight))
-        return GAP.get() + pill + badges().sumOf { BADGE_GAP.get() + badgeWidth(fonts, it) }
+        val editor = inlay.editor
+        val content = contentWidth(editor)
+        val lineEndX = editor.offsetToXY(inlay.offset).x
+        val minimumStart = lineEndX + GAP.get()
+        if (!BlameSettings.alignRight) return minimumStart - lineEndX + content
+
+        // At the right-margin guide, pulled left if the window is too narrow to show it all there.
+        val line = editor.document.getLineNumber(inlay.offset)
+        val marginX = editor.logicalPositionToXY(LogicalPosition(line, editor.settings.getRightMargin(editor.project))).x + MARGIN_GAP.get()
+        val visible = editor.scrollingModel.visibleArea
+        val lastFittingStart = visible.x + visible.width - content - EDGE_GAP.get()
+        val start = maxOf(minimumStart, minOf(marginX, lastFittingStart))
+        return start - lineEndX + content
     }
 
     override fun paint(inlay: Inlay<*>, g: Graphics, targetRegion: Rectangle, textAttributes: TextAttributes) {
@@ -42,7 +57,8 @@ class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
             val fonts = Fonts(editor)
             val height = pillHeight(targetRegion.height)
             val top = targetRegion.y + (targetRegion.height - height) / 2
-            var x = targetRegion.x + GAP.get()
+            // Content is right-aligned in the inlay; the space before it is the gap computed above.
+            var x = targetRegion.x + targetRegion.width - contentWidth(editor)
 
             x += paintPill(g2, editor, fonts, x, top, height)
             for (badge in badges()) {
@@ -56,6 +72,12 @@ class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
     }
 
     override fun getContextMenuGroupId(inlay: Inlay<*>): String = "GitDashboard.BlameOptions"
+
+    /** Width of the pill plus its badges, without the leading gap. */
+    private fun contentWidth(editor: Editor): Int {
+        val fonts = Fonts(editor)
+        return pillWidth(fonts, pillHeight(editor.lineHeight)) + badges().sumOf { BADGE_GAP.get() + badgeWidth(fonts, it) }
+    }
 
     // ---- pill -------------------------------------------------------------------------------
 
@@ -154,6 +176,8 @@ class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
         const val BADGE_ALPHA = 46
         // Spacing in unscaled pixels; JBValue scales with the IDE zoom when read.
         val GAP = JBUI.uiIntValue("GitDashboard.blame.gap", 24)
+        val MARGIN_GAP = JBUI.uiIntValue("GitDashboard.blame.marginGap", 12)
+        val EDGE_GAP = JBUI.uiIntValue("GitDashboard.blame.edgeGap", 16)
         val PAD = JBUI.uiIntValue("GitDashboard.blame.pad", 3)
         val PAD_END = JBUI.uiIntValue("GitDashboard.blame.padEnd", 9)
         val BADGE_GAP = JBUI.uiIntValue("GitDashboard.blame.badgeGap", 6)

@@ -25,6 +25,8 @@
         <notificationGroup id="Git Dashboard" displayType="BALLOON"/>
         <postStartupActivity implementation="dev.gitdashboard.blame.InlineBlameStartup"/>
         <colorSettingsPage implementation="dev.gitdashboard.blame.BlameColorSettingsPage"/>
+        <statusBarWidgetFactory id="GitDashboard.Sync"
+                                implementation="dev.gitdashboard.statusbar.SyncStatusBarWidgetFactory"/>
         <additionalTextAttributes scheme="Default" file="colorSchemes/GitDashboardDefault.xml"/>
         <additionalTextAttributes scheme="Darcula" file="colorSchemes/GitDashboardDarcula.xml"/>
     </extensions>
@@ -38,10 +40,21 @@
                     description="Show the author, date and commit of the caret line at its end"/>
             <action id="GitDashboard.ToggleCommitLineMarks"
                     class="dev.gitdashboard.blame.ToggleCommitLineMarksAction"
-                    text="Highlight Lines From the Same Commit"
-                    description="Tint every line that was changed in the same commit as the caret line"/>
+                    text="Allow Lighting Up a Commit's Lines"
+                    description="Let a double-click or Alt+Shift+B tint every line from the same commit"/>
+            <action id="GitDashboard.ToggleBlameAlignRight"
+                    class="dev.gitdashboard.blame.ToggleBlameAlignRightAction"
+                    text="Keep Line Blame at the Right Margin"
+                    description="Line the blame up at the right-margin guide instead of right after the code"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </group>
+        <action id="GitDashboard.HighlightCommitLines"
+                class="dev.gitdashboard.blame.HighlightCommitLinesAction"
+                text="Light Up This Commit's Lines"
+                description="Tint every line from the same commit as the caret line (again to clear)">
+            <keyboard-shortcut keymap="$default" first-keystroke="shift alt B"/>
+            <add-to-group group-id="GitDashboard.BlameOptions" anchor="first"/>
+        </action>
         <action id="GitDashboard.CopyGitHubLink"
                 class="dev.gitdashboard.blame.CopyGitHubLinkAction"
                 text="Copy GitHub Link to Line"
