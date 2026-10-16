@@ -23,5 +23,24 @@
                     icon="AllIcons.Vcs.Branch"
                     factoryClass="dev.gitdashboard.toolwindow.GitDashboardToolWindowFactory"/>
         <notificationGroup id="Git Dashboard" displayType="BALLOON"/>
+        <postStartupActivity implementation="dev.gitdashboard.blame.InlineBlameStartup"/>
+        <colorSettingsPage implementation="dev.gitdashboard.blame.BlameColorSettingsPage"/>
+        <additionalTextAttributes scheme="Default" file="colorSchemes/GitDashboardDefault.xml"/>
+        <additionalTextAttributes scheme="Darcula" file="colorSchemes/GitDashboardDarcula.xml"/>
     </extensions>
+
+    <actions>
+        <!-- Editor right-click menu (and right-click on the blame text itself). -->
+        <group id="GitDashboard.BlameOptions" text="Git Dashboard" popup="true">
+            <action id="GitDashboard.ToggleInlineBlame"
+                    class="dev.gitdashboard.blame.ToggleInlineBlameAction"
+                    text="Show Who Changed the Current Line"
+                    description="Show the author, date and commit of the caret line at its end"/>
+            <action id="GitDashboard.ToggleCommitLineMarks"
+                    class="dev.gitdashboard.blame.ToggleCommitLineMarksAction"
+                    text="Highlight Lines From the Same Commit"
+                    description="Tint every line that was changed in the same commit as the caret line"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </group>
+    </actions>
 </idea-plugin>
