@@ -16,6 +16,8 @@ import com.intellij.util.ui.UIUtil
 import com.intellij.vcs.log.impl.HashImpl
 import com.intellij.vcs.log.impl.VcsLogNavigationUtil
 import dev.gitdashboard.git.tryGit
+import dev.gitdashboard.github.gitHubCommitUrl
+import dev.gitdashboard.github.gitHubLineUrl
 import git4idea.commands.GitCommand
 import git4idea.repo.GitRepository
 import java.awt.datatransfer.StringSelection
@@ -47,11 +49,30 @@ fun showBlamePopup(project: Project, repo: GitRepository, line: BlameLine.Commit
                 CopyPasteManager.getInstance().setContents(StringSelection(hash))
                 popup.cancel()
             }
-            gitHubCommitUrl(repo, hash)?.let { url ->
-                link("Open on GitHub") {
-                    popup.cancel()
-                    BrowserUtil.browse(url)
+            // Unpushed commits don't exist on GitHub yet, so their links would 404.
+            if (CommitBadge.NOT_PUSHED !in line.badges) {
+                gitHubCommitUrl(repo, hash)?.let { url ->
+                    link("Open on GitHub") {
+                        popup.cancel()
+                        BrowserUtil.browse(url)
+                    }
                 }
+                gitHubLineUrl(repo, hash, info.filePath, info.originalLineNumber)?.let { url ->
+                    link("Copy Link to Line") {
+                        popup.cancel()
+                        copyAndConfirm(project, url)
+                    }
+                }
+            }
+        }
+        if (line.badges.isNotEmpty()) {
+            row {
+                comment(line.badges.joinToString("   ") {
+                    when (it) {
+                        CommitBadge.NOT_PUSHED -> "↑ Only on your computer: push to share it."
+                        CommitBadge.NEW -> "✦ Arrived from someone else in the last day."
+                    }
+                })
             }
         }
     }.apply { border = JBUI.Borders.empty(8, 12) }
@@ -73,18 +94,6 @@ fun showBlamePopup(project: Project, repo: GitRepository, line: BlameLine.Commit
             popup.pack(true, true)
         }, ModalityState.any())
     }
-}
-
-/** https://github.com/owner/repo/commit/<hash> when a remote points at github.com, else null. */
-private fun gitHubCommitUrl(repo: GitRepository, hash: String): String? {
-    val remotes = repo.remotes.sortedBy { if (it.name == "origin") 0 else 1 }
-    val pattern = Regex("""github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$""")
-    for (remote in remotes) {
-        val match = remote.urls.firstNotNullOfOrNull { pattern.find(it) } ?: continue
-        val (owner, name) = match.destructured
-        return "https://github.com/$owner/$name/commit/$hash"
-    }
-    return null
 }
 
 private fun String.escapeHtml() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

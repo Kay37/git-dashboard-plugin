@@ -42,5 +42,12 @@
                     description="Tint every line that was changed in the same commit as the caret line"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </group>
+        <action id="GitDashboard.CopyGitHubLink"
+                class="dev.gitdashboard.blame.CopyGitHubLinkAction"
+                text="Copy GitHub Link to Line"
+                description="Copy a permanent GitHub link to the selected lines">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="GitDashboard.BlameOptions" anchor="first"/>
+        </action>
     </actions>
 </idea-plugin>

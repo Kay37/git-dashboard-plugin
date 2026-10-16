@@ -15,6 +15,7 @@ sealed interface BlameLine {
         val byYou: Boolean,
         /** Position of the commit in its history (1 = first commit); null until looked up. */
         val number: Int? = null,
+        val badges: Set<CommitBadge> = emptySet(),
     ) : BlameLine {
         val hash: String get() = info.revisionNumber.asString()
         val shortHash: String get() = hash.take(7)
@@ -26,7 +27,8 @@ sealed interface BlameLine {
     }
 
     data object Uncommitted : BlameLine {
-        override val label = "You • Not committed yet"
+        // The pill's amber dot already marks the line as yours and unsaved.
+        override val label = "Not committed yet"
         override val commitId: String? = null
     }
 }

@@ -73,6 +73,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
             override fun selectionChanged(event: FileEditorManagerEvent) = refreshAll()
         })
         project.service<BlameCache>().onInvalidated = ::refreshAll
+        project.service<CommitBadges>().onChanged = ::refreshAll
 
         cs.launch {
             updates.debounce(120).collect { editor -> withContext(Dispatchers.EDT) { update(editor) } }
@@ -112,7 +113,10 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         val lines = UpToDateLineNumberProviderImpl(document, project)
         val yourEmail = GitUserRegistry.getInstance(project).getUser(repo.root)?.email
         val blame = when (val described = describeLine(annotation, lines, caretLine, yourEmail)) {
-            is BlameLine.Committed -> described.copy(number = cache.commitNumber(repo, described.hash) { update(editor) })
+            is BlameLine.Committed -> described.copy(
+                number = cache.commitNumber(repo, described.hash) { update(editor) },
+                badges = project.service<CommitBadges>().badgesFor(repo, described.hash) { update(editor) }.orEmpty(),
+            )
             BlameLine.Uncommitted -> described
         }
 
