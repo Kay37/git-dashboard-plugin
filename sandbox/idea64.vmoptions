@@ -1,0 +1,3 @@
+# Added on top of IntelliJ's own bin/idea64.exe.vmoptions by "mvn exec:exec@run-ide".
+# Internal mode enables Tools > Internal Actions (UI Inspector etc.), handy for plugin work.
+-Didea.is.internal=true

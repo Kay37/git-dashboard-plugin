@@ -1,0 +1,26 @@
+<idea-plugin>
+    <id>dev.gitdashboard</id>
+    <name>Git Dashboard</name>
+    <!-- Filled in from pom.xml at build time. -->
+    <version>${project.version}</version>
+    <vendor>Git Dashboard</vendor>
+
+    <description><![CDATA[
+        A friendly, all-in-one Git and GitHub panel: see your branch and sync state at a glance,
+        commit and push in one step, switch branches quickly, and keep an eye on pull requests and CI.
+    ]]></description>
+
+    <!-- Built and tested against IntelliJ 2026.2 (build 262). -->
+    <idea-version since-build="262"/>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+    <depends>org.jetbrains.plugins.github</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Git Dashboard"
+                    anchor="right"
+                    icon="AllIcons.Vcs.Branch"
+                    factoryClass="dev.gitdashboard.toolwindow.GitDashboardToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      The parent puts the jars of the IntelliJ install on this machine on the compile classpath
+      (JetBrains only publishes a Gradle build plugin, not Maven artifacts). It also defines
+      ${idea.home}. After updating IntelliJ, regenerate it with scripts/generate-ide-platform-pom.ps1.
+      The IDE already ships the Kotlin stdlib and coroutines, so the plugin does not bundle them.
+    -->
+    <parent>
+        <groupId>dev.gitdashboard</groupId>
+        <artifactId>ide-platform</artifactId>
+        <version>local</version>
+        <relativePath>ide-platform/pom.xml</relativePath>
+    </parent>
+
+    <artifactId>git-dashboard</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+    <name>Git Dashboard</name>
+
+    <properties>
+        <!-- Throwaway IDE profile used by "run-ide"; kept outside OneDrive because its caches are large. -->
+        <sandbox.dir>${user.home}/.idea-sandbox/git-dashboard</sandbox.dir>
+        <plugin.dir.name>git-dashboard</plugin.dir.name>
+
+        <!-- IntelliJ 2026.2 is built with Kotlin 2.4 and bundles the 2.4 stdlib. -->
+        <kotlin.version>2.4.21</kotlin.version>
+        <kotlin.compiler.jvmTarget>21</kotlin.compiler.jvmTarget>
+        <kotlin.compiler.apiVersion>2.4</kotlin.compiler.apiVersion>
+        <kotlin.compiler.languageVersion>2.4</kotlin.compiler.languageVersion>
+
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <build>
+        <sourceDirectory>src/main/kotlin</sourceDirectory>
+
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>META-INF/plugin.xml</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <excludes>
+                    <exclude>META-INF/plugin.xml</exclude>
+                </excludes>
+            </resource>
+        </resources>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <!-- Installs the freshly built jar into the sandbox IDE used by run-ide / debug-ide. -->
+                    <execution>
+                        <id>deploy-to-sandbox</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <delete dir="${sandbox.dir}/plugins/${plugin.dir.name}"/>
+                                <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                      todir="${sandbox.dir}/plugins/${plugin.dir.name}/lib"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Builds target/git-dashboard-<version>.zip, installable via Settings > Plugins > Install Plugin from Disk. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.7.1</version>
+                <executions>
+                    <execution>
+                        <id>plugin-zip</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>src/assembly/plugin-zip.xml</descriptor>
+                            </descriptors>
+                            <appendAssemblyId>false</appendAssemblyId>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+              mvn package exec:exec@run-ide    starts a separate IntelliJ with the plugin installed.
+              mvn package exec:exec@debug-ide  same, listening for a debugger on port 5005.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <executable>${idea.home}/bin/idea64.exe</executable>
+                    <async>true</async>
+                    <!-- Keep the IDE open after Maven itself exits. -->
+                    <asyncDestroyOnShutdown>false</asyncDestroyOnShutdown>
+                    <environmentVariables>
+                        <IDEA_PROPERTIES>${project.basedir}/sandbox/idea.properties</IDEA_PROPERTIES>
+                    </environmentVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>run-ide</id>
+                        <configuration>
+                            <environmentVariables>
+                                <IDEA_VM_OPTIONS>${project.basedir}/sandbox/idea64.vmoptions</IDEA_VM_OPTIONS>
+                            </environmentVariables>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>debug-ide</id>
+                        <configuration>
+                            <environmentVariables>
+                                <IDEA_VM_OPTIONS>${project.basedir}/sandbox/idea64-debug.vmoptions</IDEA_VM_OPTIONS>
+                            </environmentVariables>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
