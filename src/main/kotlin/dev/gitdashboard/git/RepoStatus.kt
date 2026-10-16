@@ -22,6 +22,8 @@ data class RepoStatus(
     val state: Repository.State,
     /** Files with unresolved merge conflicts. */
     val conflicts: Int,
+    /** Whether any remote (GitHub or otherwise) is configured. */
+    val hasRemotes: Boolean,
 ) {
     val name: String get() = repository.root.name
 
@@ -47,6 +49,7 @@ fun loadRepoStatuses(project: Project): List<RepoStatus> =
             behind = behind,
             state = repo.state,
             conflicts = conflictedPaths(project, repo).size,
+            hasRemotes = repo.remotes.isNotEmpty(),
         )
     }
 

@@ -10,6 +10,7 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressIndicator
@@ -24,6 +25,7 @@ import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.ChangeListListener
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.ui.JBColor
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBPanelWithEmptyText
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.ui.dsl.builder.Row
@@ -58,19 +60,20 @@ import javax.swing.JPanel
  * Everything refreshes whenever Git state or local changes change.
  */
 class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(true, true), Disposable {
-    private val cards = JBPanelWithEmptyText(VerticalLayout(JBUI.scale(8))).withEmptyText("No Git repository in this project")
+    private val cards = JBPanelWithEmptyText(VerticalLayout(JBUI.scale(8))).withEmptyText("This project isn't tracked by Git yet").apply {
+        emptyText.appendLine("Create Git Repository", SimpleTextAttributes.LINK_PLAIN_ATTRIBUTES) {
+            createRepositoryWithConfirmation(project, ::requestRefresh)
+        }
+    }
     private val commitSection = CommitSection(project, this, onGitStateChanged = ::requestRefresh)
+    private val content = JPanel(BorderLayout())
 
     private val refreshRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     @Volatile private var statuses: List<RepoStatus> = emptyList()
 
     init {
         toolbar = createToolbar()
-        cards.border = JBUI.Borders.compound(JBUI.Borders.customLineBottom(JBColor.border()), JBUI.Borders.empty(8, 12))
-        setContent(JPanel(BorderLayout()).apply {
-            add(cards, BorderLayout.NORTH)
-            add(commitSection, BorderLayout.CENTER)
-        })
+        setContent(content)
 
         startRefreshLoop()
         subscribeToGitChanges()
@@ -110,11 +113,21 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         this.statuses = statuses
         cards.removeAll()
         statuses.forEach { cards.add(createCard(it, showRepoName = statuses.size > 1)) }
-        cards.revalidate()
-        cards.repaint()
-
-        commitSection.isVisible = statuses.isNotEmpty()
         commitSection.setChanges(changes)
+
+        // With no repository, the empty-state message (and its Create link) gets the whole panel.
+        content.removeAll()
+        if (statuses.isEmpty()) {
+            cards.border = JBUI.Borders.empty(8, 12)
+            content.add(cards, BorderLayout.CENTER)
+        }
+        else {
+            cards.border = JBUI.Borders.compound(JBUI.Borders.customLineBottom(JBColor.border()), JBUI.Borders.empty(8, 12))
+            content.add(cards, BorderLayout.NORTH)
+            content.add(commitSection, BorderLayout.CENTER)
+        }
+        content.revalidate()
+        content.repaint()
     }
 
     private fun createCard(status: RepoStatus, showRepoName: Boolean): JComponent = panel {
@@ -128,6 +141,11 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         row {
             if (status.operationInProgress || status.conflicts > 0) {
                 operationRow(status)
+            }
+            else if (!status.hasRemotes) {
+                secondaryLabel("Only on this computer")
+                link("Publish to GitHub…") { publishToGitHub(project, status.repository, ::requestRefresh) }
+                link("Add Remote…") { showRemotes(status.repository) }
             }
             else {
                 secondaryLabel(syncText(status))
@@ -208,9 +226,31 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             override fun actionPerformed(e: AnActionEvent) =
                 chooseRepo("Undo Last Commit", statuses.filter { it.hasUnpushedCommits }.map { it.repository }, ::confirmAndUndo)
         }
-        val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", DefaultActionGroup(refresh, sync, push, undo), true)
+        val remotes = object : DumbAwareAction("Remotes…", "See, add, edit or remove where this repository pushes to", AllIcons.General.Web) {
+            override fun getActionUpdateThread() = ActionUpdateThread.BGT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = statuses.isNotEmpty()
+            }
+            override fun actionPerformed(e: AnActionEvent) =
+                chooseRepo("Remotes", statuses.map { it.repository }, ::showRemotes)
+        }
+        val publish = object : DumbAwareAction("Publish to GitHub…", "Create a GitHub repository for this project and push to it", AllIcons.Vcs.Vendors.Github) {
+            override fun getActionUpdateThread() = ActionUpdateThread.BGT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = statuses.isNotEmpty()
+            }
+            override fun actionPerformed(e: AnActionEvent) =
+                chooseRepo("Publish to GitHub", statuses.map { it.repository }) { publishToGitHub(project, it, ::requestRefresh) }
+        }
+        val group = DefaultActionGroup(refresh, sync, push, undo, Separator.getInstance(), remotes, publish)
+        val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", group, true)
         toolbar.targetComponent = this
         return toolbar.component
+    }
+
+    private fun showRemotes(repo: GitRepository) {
+        RemotesDialog(project, repo).show()
+        requestRefresh()
     }
 
     /** Runs [action] on the only candidate, or asks which repository when the project has several. */

@@ -60,13 +60,16 @@ fun listUnpushedCommits(project: Project, repo: GitRepository): List<UnpushedCom
  *
  * @param upToCommit push only this commit and the commits before it; null pushes the whole branch.
  *   Git can't push a commit without its ancestors, so "up to" is the only kind of partial push.
+ * @param publishTo remote to publish to when the branch has no upstream yet; defaults to "origin"
+ *   or the first remote.
  * @return the remote branch pushed to, e.g. "origin/main".
  */
-fun pushCurrentBranch(project: Project, repo: GitRepository, upToCommit: String? = null): String {
+fun pushCurrentBranch(project: Project, repo: GitRepository, upToCommit: String? = null, publishTo: String? = null): String {
     val branch = repo.currentBranch
         ?: throw GitOperationException("You're not on a branch (detached HEAD), so there is nothing to push.")
     val trackInfo = GitBranchUtil.getTrackInfoForBranch(repo, branch)
     val remote = trackInfo?.remote
+        ?: publishTo?.let { GitUtil.findRemoteByName(repo, it) }
         ?: GitUtil.getDefaultOrFirstRemote(repo.remotes)
         ?: throw GitOperationException("${repo.root.name} has no remote yet. Add one (e.g. a GitHub repository) to push.")
     val url = remote.firstUrl
