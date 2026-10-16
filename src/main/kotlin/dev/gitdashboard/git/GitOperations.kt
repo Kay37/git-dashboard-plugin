@@ -95,21 +95,28 @@ fun lastCommitSubject(project: Project, repo: GitRepository): String =
 
 /** Removes the latest commit but keeps its changes in the working tree, ready to commit again. */
 fun undoLastCommit(project: Project, repo: GitRepository) {
-    val hasParent = Git.getInstance().runCommand(
-        GitLineHandler(project, repo.root, GitCommand.REV_PARSE).apply {
-            addParameters("--verify", "--quiet", "HEAD~1")
-            setSilent(true)
-        }
-    ).success()
+    val hasParent = tryGit(project, repo, GitCommand.REV_PARSE, "--verify", "--quiet", "HEAD~1") { setSilent(true) }.success()
     if (!hasParent) throw GitOperationException("This is the repository's first commit, so it can't be undone this way.")
 
     runGit(project, repo, GitCommand.RESET, "--soft", "HEAD~1")
     afterRepoChanged(project, repo)
 }
 
-private fun runGit(project: Project, repo: GitRepository, command: GitCommand, vararg params: String): GitCommandResult {
-    val handler = GitLineHandler(project, repo.root, command).apply { addParameters(*params) }
-    val result = Git.getInstance().runCommand(handler)
+/** Runs git and returns the result whether or not it succeeded. */
+internal fun tryGit(
+    project: Project, repo: GitRepository, command: GitCommand, vararg params: String,
+    configure: GitLineHandler.() -> Unit = {},
+): GitCommandResult {
+    val handler = GitLineHandler(project, repo.root, command).apply {
+        addParameters(*params)
+        configure()
+    }
+    return Git.getInstance().runCommand(handler)
+}
+
+/** Runs git and throws a [GitOperationException] carrying git's error output if it fails. */
+internal fun runGit(project: Project, repo: GitRepository, command: GitCommand, vararg params: String): GitCommandResult {
+    val result = tryGit(project, repo, command, *params)
     if (!result.success()) {
         throw GitOperationException(result.errorOutputAsJoinedString.ifBlank { "git ${command.name()} failed." })
     }
@@ -120,15 +127,24 @@ private fun explainPushFailure(result: GitCommandResult): String {
     val output = result.errorOutputAsJoinedString
     return when {
         "rejected" in output && ("fetch first" in output || "non-fast-forward" in output) ->
-            "The remote has commits you don't have yet. Pull them first, then push again."
+            "The remote has commits you don't have yet. Click Sync to pull them in, then push again."
+        else -> explainRemoteFailure(result, "Push failed.")
+    }
+}
+
+internal fun explainRemoteFailure(result: GitCommandResult, fallback: String): String {
+    val output = result.errorOutputAsJoinedString
+    return when {
         "Authentication failed" in output || "could not read Username" in output ->
             "GitHub sign-in failed. Check your account under Settings > Version Control > GitHub."
-        else -> output.ifBlank { "Push failed." }
+        "Could not resolve host" in output || "unable to access" in output ->
+            "Couldn't reach the remote. Check your internet connection and try again."
+        else -> output.ifBlank { fallback }
     }
 }
 
 /** Reloads IntelliJ's view of the repository so the dashboard and the IDE's own Git UI update. */
-private fun afterRepoChanged(project: Project, repo: GitRepository) {
+internal fun afterRepoChanged(project: Project, repo: GitRepository) {
     repo.update()
     VcsDirtyScopeManager.getInstance(project).rootDirty(repo.root)
 }

@@ -1,5 +1,6 @@
 package dev.gitdashboard.toolwindow
 
+import com.intellij.dvcs.repo.Repository
 import com.intellij.dvcs.repo.VcsRepositoryManager
 import com.intellij.dvcs.repo.VcsRepositoryMappingListener
 import com.intellij.icons.AllIcons
@@ -37,6 +38,7 @@ import dev.gitdashboard.git.lastCommitSubject
 import dev.gitdashboard.git.loadRepoStatuses
 import dev.gitdashboard.git.undoLastCommit
 import dev.gitdashboard.notifyUser
+import dev.gitdashboard.pluralize
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
 import kotlinx.coroutines.Dispatchers
@@ -124,12 +126,42 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             label(status.branch ?: "Detached at ${status.detachedAt ?: "unknown"}").bold()
         }
         row {
-            secondaryLabel(syncText(status))
-            if (status.hasUnpushedCommits) {
-                link(if (status.upstream == null) "Publish" else "Push") { pushWithChoice(project, status.repository, ::requestRefresh) }
+            if (status.operationInProgress || status.conflicts > 0) {
+                operationRow(status)
+            }
+            else {
+                secondaryLabel(syncText(status))
+                if (status.canSync) {
+                    link("Sync") { syncInBackground(project, status.repository, ::requestRefresh) }
+                }
+                if (status.hasUnpushedCommits) {
+                    link(if (status.upstream == null) "Publish" else "Push") { pushWithChoice(project, status.repository, ::requestRefresh) }
+                }
             }
         }
     }
+
+    /** A merge or rebase stopped part-way: say so and offer the ways out. */
+    private fun Row.operationRow(status: RepoStatus) {
+        val operation = if (status.state == Repository.State.REBASING) "Rebase" else "Merge"
+        val text = buildList {
+            if (status.operationInProgress) add("$operation in progress")
+            if (status.conflicts > 0) add(pluralize(status.conflicts, "conflict"))
+        }.joinToString(" · ")
+        label(text).applyToComponent { foreground = JBColor.ORANGE }
+
+        val next = when {
+            status.conflicts > 0 -> "Resolve"
+            status.state == Repository.State.REBASING -> "Continue"
+            else -> "Finish"
+        }
+        link(next) { resolveConflicts(project, status.repository, ::requestRefresh) }
+        if (status.operationInProgress) {
+            link("Abort") { abortWithConfirmation(project, status.repository, ::requestRefresh) }
+        }
+    }
+
+    private val RepoStatus.canSync: Boolean get() = branch != null && upstream != null && !operationInProgress
 
     private fun Row.secondaryLabel(text: String) =
         label(text).applyToComponent { foreground = UIUtil.getContextHelpForeground() }
@@ -147,6 +179,16 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
     private fun createToolbar(): JComponent {
         val refresh = object : DumbAwareAction("Refresh", "Reload Git status", AllIcons.Actions.Refresh) {
             override fun actionPerformed(e: AnActionEvent) = requestRefresh()
+        }
+        val sync = object : DumbAwareAction("Sync", "Pull remote commits, then push yours", AllIcons.Actions.CheckOut) {
+            override fun getActionUpdateThread() = ActionUpdateThread.BGT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = statuses.any { it.canSync }
+            }
+            override fun actionPerformed(e: AnActionEvent) =
+                chooseRepo("Sync", statuses.filter { it.canSync }.map { it.repository }) {
+                    syncInBackground(project, it, ::requestRefresh)
+                }
         }
         val push = object : DumbAwareAction("Push", "Push unpushed commits on the current branch", AllIcons.Vcs.Push) {
             override fun getActionUpdateThread() = ActionUpdateThread.BGT
@@ -166,7 +208,7 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             override fun actionPerformed(e: AnActionEvent) =
                 chooseRepo("Undo Last Commit", statuses.filter { it.hasUnpushedCommits }.map { it.repository }, ::confirmAndUndo)
         }
-        val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", DefaultActionGroup(refresh, push, undo), true)
+        val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", DefaultActionGroup(refresh, sync, push, undo), true)
         toolbar.targetComponent = this
         return toolbar.component
     }
