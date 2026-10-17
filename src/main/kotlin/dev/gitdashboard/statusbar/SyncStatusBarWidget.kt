@@ -2,7 +2,9 @@ package dev.gitdashboard.statusbar
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionGroup
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -10,22 +12,23 @@ import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.wm.CustomStatusBarWidget
+import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.ui.ClickListener
+import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
-import com.intellij.ui.SimpleColoredComponent
-import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.awt.RelativePoint
-import com.intellij.util.ui.JBUI
 import dev.gitdashboard.git.RepoStatus
 import dev.gitdashboard.git.loadRepoStatuses
+import dev.gitdashboard.pluralize
 import dev.gitdashboard.toolwindow.publishToGitHub
 import dev.gitdashboard.toolwindow.pushWithChoice
 import dev.gitdashboard.toolwindow.resolveConflicts
+import dev.gitdashboard.toolwindow.showBranchSwitcher
 import dev.gitdashboard.toolwindow.syncInBackground
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
@@ -40,8 +43,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Color
-import java.awt.Cursor
-import java.awt.event.MouseAdapter
+import java.awt.Point
 import java.awt.event.MouseEvent
 import javax.swing.JComponent
 
@@ -52,39 +54,25 @@ class SyncStatusBarWidgetFactory : StatusBarWidgetFactory {
 }
 
 /**
- * Status bar button showing the current repository's branch and how far it is from the remote
- * ("⎇ main ↑2 ↓1"). Clicking does the obvious next step: Sync, Publish, or resolve conflicts.
- * Right-click for more.
+ * Coloured chips in the status bar for the current repository, e.g.
+ *
+ *   [⎇ main ▾]  [↑ 2]  [↓ 1]
+ *
+ * The branch chip opens the branch switcher; the ↑ chip pushes; the ↓ / ✓ chips sync. Special
+ * states (not published, merge conflict, syncing) get their own chip. Right-click for a menu.
  */
 class SyncStatusBarWidget(private val project: Project, private val scope: CoroutineScope) : CustomStatusBarWidget {
-    private val label = SimpleColoredComponent().apply {
-        isOpaque = false
-        border = JBUI.Borders.empty(0, 6)
-        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-        isVisible = false
-    }
+    private val bar = ChipBar(onPopupTrigger = ::showMenu).apply { isVisible = false }
     private val refreshRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     @Volatile private var status: RepoStatus? = null
     private var syncing = false
 
     override fun ID() = ID
 
-    override fun getComponent(): JComponent = label
+    override fun getComponent(): JComponent = bar
 
     @OptIn(FlowPreview::class)
-    override fun install(statusBar: com.intellij.openapi.wm.StatusBar) {
-        object : ClickListener() {
-            override fun onClick(event: MouseEvent, clickCount: Int): Boolean {
-                if (event.button != MouseEvent.BUTTON1) return false
-                onPrimaryClick()
-                return true
-            }
-        }.installOn(label)
-        label.addMouseListener(object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) = maybeShowMenu(e)
-            override fun mouseReleased(e: MouseEvent) = maybeShowMenu(e)
-        })
-
+    override fun install(statusBar: StatusBar) {
         val connection = project.messageBus.connect(this)
         connection.subscribe(GitRepository.GIT_REPO_CHANGE, object : GitRepositoryChangeListener {
             override fun repositoryChanged(repository: GitRepository) = requestRefresh()
@@ -95,7 +83,9 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
 
         scope.launch {
             refreshRequests.debounce(250).collectLatest {
-                val current = withContext(Dispatchers.IO) { currentRepository()?.let { repo -> loadRepoStatuses(project).find { it.repository == repo } } }
+                val current = withContext(Dispatchers.IO) {
+                    currentRepository()?.let { repo -> loadRepoStatuses(project).find { it.repository == repo } }
+                }
                 withContext(Dispatchers.EDT) {
                     status = current
                     render()
@@ -116,74 +106,69 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         return file?.let { manager.getRepositoryForFileQuick(it) } ?: manager.repositories.firstOrNull()
     }
 
-    // ---- what's shown ---------------------------------------------------------------------------
+    // ---- chips --------------------------------------------------------------------------------
 
     private fun render() {
         val status = status
-        label.clear()
-        label.isVisible = status != null
-        if (status == null) return
+        bar.isVisible = status != null
+        bar.chips = if (status == null) emptyList() else listOf(branchChip(status)) + stateChips(status)
+    }
 
-        label.icon = AllIcons.Vcs.Branch
-        label.append(status.branch ?: "detached ${status.detachedAt.orEmpty()}", SimpleTextAttributes.REGULAR_ATTRIBUTES)
-        label.append("  ")
+    private fun branchChip(status: RepoStatus) = Chip(
+        text = "${status.branch ?: "detached ${status.detachedAt.orEmpty()}"} ▾",
+        color = BRANCH,
+        solid = false,
+        icon = AllIcons.Vcs.Branch,
+        tooltip = html("Branch <b>${status.branch ?: "(detached)"}</b>", "Click to switch, create or delete branches."),
+        onClick = { event -> openBranchSwitcher(status.repository, event) },
+    )
 
-        when {
-            syncing -> label.append("⟳ Syncing…", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            status.operationInProgress || status.conflicts > 0 ->
-                label.append("⚠ ${operationName(status)} in progress", colored(WARNING))
-            !status.hasRemotes -> label.append("local only", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            status.upstream == null -> label.append("not published", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            (status.ahead ?: 0) == 0 && (status.behind ?: 0) == 0 -> label.append("✓", colored(UP_TO_DATE))
-            else -> {
-                if ((status.ahead ?: 0) > 0) label.append("↑${status.ahead}", colored(TO_PUSH))
-                if ((status.ahead ?: 0) > 0 && (status.behind ?: 0) > 0) label.append(" ")
-                if ((status.behind ?: 0) > 0) label.append("↓${status.behind}", colored(TO_PULL))
+    private fun stateChips(status: RepoStatus): List<Chip> {
+        val repo = status.repository
+        val ahead = status.ahead ?: 0
+        val behind = status.behind ?: 0
+        val upstream = status.upstream.orEmpty()
+        return when {
+            syncing -> listOf(Chip("Syncing…", NEUTRAL, solid = false, icon = AnimatedIcon.Default.INSTANCE,
+                tooltip = html("Syncing with ${upstream.ifEmpty { "the remote" }}…")))
+
+            status.operationInProgress || status.conflicts > 0 -> {
+                val operation = if (status.state.name == "REBASING") "Rebase" else "Merge"
+                listOf(Chip("⚠ $operation conflict", CONFLICT, solid = true,
+                    tooltip = html("A ${operation.lowercase()} stopped on ${pluralize(status.conflicts, "conflict")}.", "Click to resolve them."),
+                    onClick = { resolveConflicts(project, repo, ::requestRefresh) }))
+            }
+
+            !status.hasRemotes -> listOf(Chip("☁ Publish to GitHub", PUBLISH, solid = false,
+                tooltip = html("This repository is only on your computer.", "Click to create a GitHub repository for it."),
+                onClick = { publishToGitHub(project, repo, ::requestRefresh) }))
+
+            status.upstream == null -> listOf(Chip("↑ Publish branch", TO_PUSH, solid = true,
+                tooltip = html("This branch isn't on the remote yet.", "Click to publish it."),
+                onClick = { pushWithChoice(project, repo, ::requestRefresh) }))
+
+            ahead == 0 && behind == 0 -> listOf(Chip("✓ Synced", SYNCED, solid = false,
+                tooltip = html("Up to date with <b>$upstream</b> as of the last check.", "Click to sync and check for new commits."),
+                onClick = { startSync(repo) }))
+
+            else -> buildList {
+                if (ahead > 0) add(Chip("↑ $ahead", TO_PUSH, solid = true,
+                    tooltip = html("${pluralize(ahead, "commit")} to push to <b>$upstream</b>.",
+                        if (behind > 0) "Click to sync: pull first, then push." else "Click to push (you can choose which commits)."),
+                    onClick = { if (behind > 0) startSync(repo) else pushWithChoice(project, repo, ::requestRefresh) }))
+                if (behind > 0) add(Chip("↓ $behind", TO_PULL, solid = true,
+                    tooltip = html("${pluralize(behind, "commit")} to pull from <b>$upstream</b>.", "Click to sync."),
+                    onClick = { startSync(repo) }))
             }
         }
-        label.toolTipText = tooltip(status)
-        label.revalidate()
-        label.repaint()
     }
 
-    private fun tooltip(status: RepoStatus): String {
-        val where = status.upstream?.let { "${status.branch} → $it" } ?: status.branch.orEmpty()
-        val state = when {
-            status.operationInProgress || status.conflicts > 0 -> "A ${operationName(status).lowercase()} stopped on conflicts."
-            !status.hasRemotes -> "This repository is only on your computer."
-            status.upstream == null -> "This branch isn't on the remote yet."
-            else -> listOfNotNull(
-                (status.ahead ?: 0).takeIf { it > 0 }?.let { "$it to push" },
-                (status.behind ?: 0).takeIf { it > 0 }?.let { "$it to pull (as of the last sync)" },
-            ).joinToString(", ").ifEmpty { "Up to date (as of the last sync)." }
-        }
-        return "<html><b>$where</b><br>$state<br><br>Click to ${primaryActionName(status).lowercase()}. Right-click for more.</html>"
-    }
+    private fun html(vararg lines: String) = "<html>${lines.joinToString("<br>")}<br><br><i>Right-click for more.</i></html>"
 
-    private fun primaryActionName(status: RepoStatus) = when {
-        status.operationInProgress || status.conflicts > 0 -> "Resolve conflicts"
-        !status.hasRemotes -> "Publish to GitHub"
-        status.upstream == null -> "Publish this branch"
-        else -> "Sync"
-    }
-
-    private fun operationName(status: RepoStatus) = if (status.state.name == "REBASING") "Rebase" else "Merge"
-
-    // ---- what clicking does -----------------------------------------------------------------
-
-    private fun onPrimaryClick() {
-        val status = status ?: return
-        if (syncing) return
-        val repo = status.repository
-        when {
-            status.operationInProgress || status.conflicts > 0 -> resolveConflicts(project, repo, ::requestRefresh)
-            !status.hasRemotes -> publishToGitHub(project, repo, ::requestRefresh)
-            status.upstream == null -> pushWithChoice(project, repo, ::requestRefresh)
-            else -> startSync(repo)
-        }
-    }
+    // ---- actions ------------------------------------------------------------------------------
 
     private fun startSync(repo: GitRepository) {
+        if (syncing) return
         syncing = true
         render()
         syncInBackground(project, repo) {
@@ -193,21 +178,29 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         }
     }
 
-    private fun maybeShowMenu(e: MouseEvent) {
-        if (!e.isPopupTrigger) return
-        val status = status ?: return
-        JBPopupFactory.getInstance()
-            .createActionGroupPopup(null, menu(status), com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
-                JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, true)
-            .show(RelativePoint(e))
-        e.consume()
+    private fun openBranchSwitcher(repo: GitRepository, event: MouseEvent) {
+        showBranchSwitcher(project, repo, ::requestRefresh) { popup -> showAbove(popup, event) }
     }
 
-    private fun menu(status: RepoStatus): ActionGroup {
+    /** Opens upward from the click, since the status bar sits at the bottom of the window. */
+    private fun showAbove(popup: JBPopup, event: MouseEvent) {
+        val height = popup.content.preferredSize.height
+        popup.show(RelativePoint(bar, Point(event.x, -height)))
+    }
+
+    private fun showMenu(event: MouseEvent) {
+        val status = status ?: return
+        val popup = JBPopupFactory.getInstance().createActionGroupPopup(
+            null, menu(status, event), DataContext.EMPTY_CONTEXT, JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, true,
+        )
+        showAbove(popup, event)
+    }
+
+    private fun menu(status: RepoStatus, event: MouseEvent): ActionGroup {
         val repo = status.repository
         fun action(text: String, icon: javax.swing.Icon?, enabled: Boolean = true, run: () -> Unit) =
             object : DumbAwareAction(text, null, icon) {
-                override fun getActionUpdateThread() = com.intellij.openapi.actionSystem.ActionUpdateThread.EDT
+                override fun getActionUpdateThread() = ActionUpdateThread.EDT
                 override fun update(e: AnActionEvent) {
                     e.presentation.isEnabled = enabled && !syncing
                 }
@@ -216,6 +209,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         return DefaultActionGroup(
             action("Sync", AllIcons.Actions.CheckOut, enabled = status.upstream != null && !status.operationInProgress) { startSync(repo) },
             action("Push…", AllIcons.Vcs.Push, enabled = status.hasUnpushedCommits && status.hasRemotes) { pushWithChoice(project, repo, ::requestRefresh) },
+            action("Switch Branch…", AllIcons.Vcs.Branch) { openBranchSwitcher(repo, event) },
             action("Refresh", AllIcons.Actions.Refresh) { requestRefresh() },
             action("Open Git Dashboard", AllIcons.Vcs.Branch) {
                 ToolWindowManager.getInstance(project).getToolWindow("Git Dashboard")?.show()
@@ -223,16 +217,17 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         )
     }
 
-    private fun colored(color: Color) = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
-
     override fun dispose() = Unit
 
     companion object {
         const val ID = "GitDashboard.Sync"
 
-        private val TO_PUSH = JBColor(Color(0xD9822B), Color(0xF0A35E))
-        private val TO_PULL = JBColor(Color(0x3574F0), Color(0x5C9DFF))
-        private val UP_TO_DATE = JBColor(Color(0x2E9E4F), Color(0x5FB865))
-        private val WARNING = JBColor(Color(0xC0702A), Color(0xE0A050))
+        private val BRANCH = JBColor(Color(0x6E5BD6), Color(0x9D8FEB))
+        private val TO_PUSH = JBColor(Color(0xDB7A1F), Color(0xD9822B))
+        private val TO_PULL = JBColor(Color(0x3574F0), Color(0x3F7EE8))
+        private val SYNCED = JBColor(Color(0x2E9E4F), Color(0x5FB865))
+        private val CONFLICT = JBColor(Color(0xD64545), Color(0xC94F4F))
+        private val PUBLISH = JBColor(Color(0x2A9D8F), Color(0x4DB6AC))
+        private val NEUTRAL = JBColor(Color(0x808080), Color(0x9A9A9A))
     }
 }

@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
+import java.awt.Font
 import javax.swing.JComponent
 import javax.swing.JPanel
 
@@ -136,7 +137,13 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         }
         row {
             icon(AllIcons.Vcs.Branch)
-            label(status.branch ?: "Detached at ${status.detachedAt ?: "unknown"}").bold()
+            // The branch name opens the branch switcher.
+            link("${status.branch ?: "Detached at ${status.detachedAt ?: "unknown"}"} ▾") { event ->
+                showBranchSwitcher(project, status.repository, ::requestRefresh) { it.showUnderneathOf(event.source as JComponent) }
+            }.applyToComponent {
+                font = font.deriveFont(Font.BOLD)
+                toolTipText = "Switch, create or delete branches"
+            }
         }
         row {
             if (status.operationInProgress || status.conflicts > 0) {
@@ -198,6 +205,16 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         val refresh = object : DumbAwareAction("Refresh", "Reload Git status", AllIcons.Actions.Refresh) {
             override fun actionPerformed(e: AnActionEvent) = requestRefresh()
         }
+        val branches = object : DumbAwareAction("Switch Branch…", "Switch, create or delete branches", AllIcons.Vcs.Branch) {
+            override fun getActionUpdateThread() = ActionUpdateThread.BGT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = statuses.isNotEmpty()
+            }
+            override fun actionPerformed(e: AnActionEvent) =
+                chooseRepo("Switch Branch", statuses.map { it.repository }) { repo ->
+                    showBranchSwitcher(project, repo, ::requestRefresh) { it.showInBestPositionFor(e.dataContext) }
+                }
+        }
         val sync = object : DumbAwareAction("Sync", "Pull remote commits, then push yours", AllIcons.Actions.CheckOut) {
             override fun getActionUpdateThread() = ActionUpdateThread.BGT
             override fun update(e: AnActionEvent) {
@@ -242,7 +259,7 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             override fun actionPerformed(e: AnActionEvent) =
                 chooseRepo("Publish to GitHub", statuses.map { it.repository }) { publishToGitHub(project, it, ::requestRefresh) }
         }
-        val group = DefaultActionGroup(refresh, sync, push, undo, Separator.getInstance(), remotes, publish)
+        val group = DefaultActionGroup(refresh, branches, sync, push, undo, Separator.getInstance(), remotes, publish)
         val toolbar = ActionManager.getInstance().createActionToolbar("GitDashboard", group, true)
         toolbar.targetComponent = this
         return toolbar.component
