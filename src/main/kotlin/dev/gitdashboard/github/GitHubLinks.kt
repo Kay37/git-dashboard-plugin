@@ -7,11 +7,14 @@ import java.net.URLEncoder
 
 private val GITHUB_REMOTE = Regex("""github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$""")
 
-/** "https://github.com/owner/name" for the first GitHub remote ("origin" preferred), or null. */
-fun gitHubRepoUrl(repo: GitRepository): String? =
+/** Owner and name of the first GitHub remote ("origin" preferred), or null if none is on github.com. */
+fun gitHubCoordinates(repo: GitRepository): RepoCoordinates? =
     repo.remotes.sortedBy { if (it.name == "origin") 0 else 1 }
         .firstNotNullOfOrNull { remote -> remote.urls.firstNotNullOfOrNull { GITHUB_REMOTE.find(it) } }
-        ?.destructured?.let { (owner, name) -> "https://github.com/$owner/$name" }
+        ?.destructured?.let { (owner, name) -> RepoCoordinates(owner, name) }
+
+/** "https://github.com/owner/name" for the first GitHub remote ("origin" preferred), or null. */
+fun gitHubRepoUrl(repo: GitRepository): String? = gitHubCoordinates(repo)?.webUrl
 
 fun gitHubCommitUrl(repo: GitRepository, hash: String): String? =
     gitHubRepoUrl(repo)?.let { "$it/commit/$hash" }

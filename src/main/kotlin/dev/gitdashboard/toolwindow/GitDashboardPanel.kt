@@ -39,6 +39,7 @@ import dev.gitdashboard.git.collectLocalChanges
 import dev.gitdashboard.git.lastCommitSubject
 import dev.gitdashboard.git.loadRepoStatuses
 import dev.gitdashboard.git.undoLastCommit
+import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.notifyUser
 import dev.gitdashboard.pluralize
 import git4idea.repo.GitRepository
@@ -67,6 +68,7 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         }
     }
     private val commitSection = CommitSection(project, this, onGitStateChanged = ::requestRefresh)
+    private val pullRequests = PullRequestsSection(project, this)
     private val content = JPanel(BorderLayout())
 
     private val refreshRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -124,7 +126,10 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         }
         else {
             cards.border = JBUI.Borders.compound(JBUI.Borders.customLineBottom(JBColor.border()), JBUI.Borders.empty(8, 12))
-            content.add(cards, BorderLayout.NORTH)
+            content.add(JPanel(BorderLayout()).apply {
+                add(cards, BorderLayout.NORTH)
+                add(pullRequests, BorderLayout.CENTER)
+            }, BorderLayout.NORTH)
             content.add(commitSection, BorderLayout.CENTER)
         }
         content.revalidate()
@@ -203,7 +208,10 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
 
     private fun createToolbar(): JComponent {
         val refresh = object : DumbAwareAction("Refresh", "Reload Git status", AllIcons.Actions.Refresh) {
-            override fun actionPerformed(e: AnActionEvent) = requestRefresh()
+            override fun actionPerformed(e: AnActionEvent) {
+                requestRefresh()
+                project.service<GitHubStatusService>().refresh()
+            }
         }
         val branches = object : DumbAwareAction("Switch Branch…", "Switch, create or delete branches", AllIcons.Vcs.Branch) {
             override fun getActionUpdateThread() = ActionUpdateThread.BGT

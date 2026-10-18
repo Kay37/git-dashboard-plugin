@@ -1,12 +1,14 @@
 package dev.gitdashboard.statusbar
 
 import com.intellij.icons.AllIcons
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.EDT
+import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
@@ -24,6 +26,9 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.awt.RelativePoint
 import dev.gitdashboard.git.RepoStatus
 import dev.gitdashboard.git.loadRepoStatuses
+import dev.gitdashboard.github.ChecksSummary
+import dev.gitdashboard.github.GitHubState
+import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.pluralize
 import dev.gitdashboard.toolwindow.publishToGitHub
 import dev.gitdashboard.toolwindow.pushWithChoice
@@ -92,6 +97,9 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
                 }
             }
         }
+        scope.launch {
+            project.service<GitHubStatusService>().states.collect { withContext(Dispatchers.EDT) { render() } }
+        }
         requestRefresh()
     }
 
@@ -111,8 +119,32 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
     private fun render() {
         val status = status
         bar.isVisible = status != null
-        bar.chips = if (status == null) emptyList() else listOf(branchChip(status)) + stateChips(status)
+        bar.chips = if (status == null) emptyList() else listOf(branchChip(status)) + stateChips(status) + gitHubChips(status.repository)
     }
+
+    /** "PR #12" for the branch's pull request and a CI chip coloured by its checks, when on GitHub. */
+    private fun gitHubChips(repo: GitRepository): List<Chip> {
+        val state = project.service<GitHubStatusService>().stateFor(repo) as? GitHubState.Ready ?: return emptyList()
+        return buildList {
+            state.currentPullRequest?.let { pr ->
+                add(Chip("PR #${pr.number}", PULL_REQUEST, solid = false, icon = AllIcons.Vcs.Vendors.Github,
+                    tooltip = html("Pull request <b>#${pr.number}</b>: ${pr.title.escapeHtml()}", "Click to open it on GitHub."),
+                    onClick = { BrowserUtil.browse(pr.url) }))
+            }
+            state.currentChecks?.let { checks ->
+                val (symbol, color) = when (checks.state) {
+                    ChecksSummary.State.PASSED -> "✓" to SYNCED
+                    ChecksSummary.State.RUNNING -> "●" to CI_RUNNING
+                    ChecksSummary.State.FAILED -> "✗" to CONFLICT
+                }
+                add(Chip("$symbol CI", color, solid = checks.state != ChecksSummary.State.PASSED,
+                    tooltip = html(checks.description + ".", "Click to see the checks on GitHub."),
+                    onClick = { BrowserUtil.browse(checks.url) }))
+            }
+        }
+    }
+
+    private fun String.escapeHtml() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private fun branchChip(status: RepoStatus) = Chip(
         text = "${status.branch ?: "detached ${status.detachedAt.orEmpty()}"} ▾",
@@ -229,5 +261,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         private val CONFLICT = JBColor(Color(0xD64545), Color(0xC94F4F))
         private val PUBLISH = JBColor(Color(0x2A9D8F), Color(0x4DB6AC))
         private val NEUTRAL = JBColor(Color(0x808080), Color(0x9A9A9A))
+        private val PULL_REQUEST = JBColor(Color(0x2A9D8F), Color(0x4DB6AC))
+        private val CI_RUNNING = JBColor(Color(0xC98A00), Color(0xC9A227))
     }
 }
