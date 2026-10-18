@@ -10,11 +10,12 @@ import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.DumbAwareToggleAction
 import com.intellij.openapi.project.ProjectManager
 
-/** IDE-wide on/off switches for the editor decorations; both default to on. */
+/** IDE-wide on/off switches for the editor decorations; all default to on. */
 object BlameSettings {
     private const val INLINE_BLAME = "gitDashboard.inlineBlame"
     private const val COMMIT_MARKS = "gitDashboard.commitLineMarks"
     private const val ALIGN_RIGHT = "gitDashboard.blameAlignRight"
+    private const val AGE_STRIPES = "gitDashboard.ageStripes"
 
     var inlineBlame: Boolean
         get() = PropertiesComponent.getInstance().getBoolean(INLINE_BLAME, true)
@@ -28,6 +29,11 @@ object BlameSettings {
     var alignRight: Boolean
         get() = PropertiesComponent.getInstance().getBoolean(ALIGN_RIGHT, true)
         set(value) = PropertiesComponent.getInstance().setValue(ALIGN_RIGHT, value, true)
+
+    /** Gutter stripes per commit block, bright for recent changes and faded for old ones. */
+    var ageStripes: Boolean
+        get() = PropertiesComponent.getInstance().getBoolean(AGE_STRIPES, true)
+        set(value) = PropertiesComponent.getInstance().setValue(AGE_STRIPES, value, true)
 
     fun redrawAllEditors() {
         ProjectManager.getInstance().openProjects.forEach { it.serviceIfCreated<InlineBlameManager>()?.refreshAll() }
@@ -57,6 +63,15 @@ class ToggleBlameAlignRightAction : DumbAwareToggleAction() {
     override fun isSelected(e: AnActionEvent) = BlameSettings.alignRight
     override fun setSelected(e: AnActionEvent, state: Boolean) {
         BlameSettings.alignRight = state
+        BlameSettings.redrawAllEditors()
+    }
+}
+
+class ToggleAgeStripesAction : DumbAwareToggleAction() {
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+    override fun isSelected(e: AnActionEvent) = BlameSettings.ageStripes
+    override fun setSelected(e: AnActionEvent, state: Boolean) {
+        BlameSettings.ageStripes = state
         BlameSettings.redrawAllEditors()
     }
 }

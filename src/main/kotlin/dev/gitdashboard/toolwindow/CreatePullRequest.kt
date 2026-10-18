@@ -25,6 +25,8 @@ import dev.gitdashboard.github.GitHubApiException
 import dev.gitdashboard.github.GitHubState
 import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.github.PullRequest
+import dev.gitdashboard.github.RepoCoordinates
+import dev.gitdashboard.github.gitHubRemote
 import dev.gitdashboard.notifyUser
 import git4idea.branch.GitBranchUtil
 import git4idea.commands.GitCommand
@@ -44,28 +46,32 @@ fun createPullRequest(project: Project, repo: GitRepository, state: GitHubState.
         private var bases: List<String> = emptyList()
 
         override fun run(indicator: ProgressIndicator) {
-            val remote = repo.currentBranch?.let { GitBranchUtil.getTrackInfoForBranch(repo, it)?.remote } ?: return
+            // The remote for the repository the pull request goes to ("upstream" when in a fork, if the project has one).
+            val remote = gitHubRemote(repo, state.repo)
+                ?: repo.currentBranch?.let { GitBranchUtil.getTrackInfoForBranch(repo, it)?.remote } ?: return
             val log = tryGit(project, repo, GitCommand.LOG, "--format=%s", "${remote.name}/${state.defaultBranch}..HEAD") { setSilent(true) }
             subjects = if (log.success()) log.output.filter { it.isNotBlank() } else emptyList()
             bases = listOf(state.defaultBranch) + repo.branches.remoteBranches
                 .filter { it.remote == remote }
                 .map { it.nameForRemoteOperations }
-                .filter { it != state.defaultBranch && it != remoteBranch && it != "HEAD" }
+                .filter { it != state.defaultBranch && it != "HEAD" && (state.isFork || it != remoteBranch) }
                 .sorted()
         }
 
         override fun onSuccess() {
             val dialog = CreatePullRequestDialog(
-                project, branch, state.repo.fullName, bases,
+                project, branch, state.repo.fullName, state.isFork, bases,
                 suggestedTitle = subjects.singleOrNull() ?: humanize(branch),
                 suggestedBody = if (subjects.size > 1) subjects.reversed().joinToString("\n") { "- $it" } else "",
             )
-            if (dialog.showAndGet()) submit(project, repo, remoteBranch, dialog)
+            // From a fork, GitHub needs to know whose branch it is: "my-name:feature".
+            val head = if (state.isFork) "${state.headRepo.owner}:$remoteBranch" else remoteBranch
+            if (dialog.showAndGet()) submit(project, repo, state.repo, head, dialog)
         }
     }.queue()
 }
 
-private fun submit(project: Project, repo: GitRepository, remoteBranch: String, dialog: CreatePullRequestDialog) {
+private fun submit(project: Project, repo: GitRepository, coordinates: RepoCoordinates, head: String, dialog: CreatePullRequestDialog) {
     val service = project.service<GitHubStatusService>()
     object : Task.Backgroundable(project, "Creating pull request", false) {
         private var created: PullRequest? = null
@@ -79,10 +85,8 @@ private fun submit(project: Project, repo: GitRepository, remoteBranch: String, 
             indicator.text = "Creating pull request on GitHub"
             val (_, token) = runBlockingCancellable { service.signedInAccount() }
                 ?: throw GitHubApiException("Sign in to GitHub first (Settings > Version Control > GitHub).")
-            val coordinates = (service.stateFor(repo) as? GitHubState.Ready)?.repo
-                ?: throw GitHubApiException("This repository isn't connected to GitHub.")
             created = GitHubApi(token, coordinates).createPullRequest(
-                dialog.prTitle.trim(), dialog.body.trim(), remoteBranch, dialog.base, dialog.draft,
+                dialog.prTitle.trim(), dialog.body.trim(), head, dialog.base, dialog.draft,
             )
         }
 
@@ -114,6 +118,7 @@ private class CreatePullRequestDialog(
     project: com.intellij.openapi.project.Project,
     private val branch: String,
     private val repoName: String,
+    private val fromFork: Boolean,
     private val bases: List<String>,
     suggestedTitle: String,
     suggestedBody: String,
@@ -131,7 +136,8 @@ private class CreatePullRequestDialog(
 
     override fun createCenterPanel(): JComponent = panel {
         row {
-            comment("Asks to merge <b>$branch</b> into the branch below on <b>$repoName</b>. Your unpushed commits are pushed first.")
+            val where = if (fromFork) "<b>$repoName</b> (the repository your fork came from)" else "<b>$repoName</b>"
+            comment("Asks to merge <b>$branch</b> into the branch below on $where. Your unpushed commits are pushed first.")
         }
         row("Title:") {
             textField().bindText(::prTitle).columns(COLUMNS_LARGE).focused()

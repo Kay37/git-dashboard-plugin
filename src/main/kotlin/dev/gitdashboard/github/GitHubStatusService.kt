@@ -33,12 +33,18 @@ import java.util.concurrent.TimeUnit
 sealed interface GitHubState {
     /** No github.com remote: nothing to show. */
     data object NotOnGitHub : GitHubState
-    /** On GitHub, but IntelliJ has no GitHub account to ask with. */
-    data class NeedsSignIn(val repo: RepoCoordinates) : GitHubState
+    /**
+     * On GitHub, but IntelliJ has no GitHub account to ask with, or GitHub rejected its sign-in
+     * ([expiredAccount] is then the account to sign in again).
+     */
+    data class NeedsSignIn(val repo: RepoCoordinates, val expiredAccount: GithubAccount? = null) : GitHubState
     data class Failed(val repo: RepoCoordinates, val message: String) : GitHubState
 
     data class Ready(
+        /** Where pull requests are opened: the repository itself, or the original a fork came from. */
         val repo: RepoCoordinates,
+        /** Where the current branch is pushed; differs from [repo] when working in a fork. */
+        val headRepo: RepoCoordinates,
         val defaultBranch: String,
         /** Current local branch, or null when detached. */
         val branch: String?,
@@ -53,6 +59,7 @@ sealed interface GitHubState {
         val pullRequestChecks: Map<Int, ChecksSummary?>,
     ) : GitHubState {
         val otherPullRequests: List<PullRequest> get() = pullRequests.filter { it != currentPullRequest }
+        val isFork: Boolean get() = !headRepo.fullName.equals(repo.fullName, ignoreCase = true)
     }
 }
 
@@ -67,14 +74,15 @@ class GitHubStatusService(private val project: Project, private val cs: Coroutin
     val states: StateFlow<Map<VirtualFile, GitHubState>> = _states.asStateFlow()
 
     private val refreshRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-    private val defaultBranches = ConcurrentHashMap<RepoCoordinates, String>()
+    private val repoInfos = ConcurrentHashMap<RepoCoordinates, RepoInfo>()
 
     init {
         project.messageBus.connect(this).subscribe(GitRepository.GIT_REPO_CHANGE, object : GitRepositoryChangeListener {
             override fun repositoryChanged(repository: GitRepository) = refresh()
         })
         startLoops()
-        refresh()
+        // Signing in or out under Settings > Version Control > GitHub updates the dashboard straight away.
+        cs.launch { ApplicationManager.getApplication().service<GHAccountManager>().accountsState.collect { refresh() } }
     }
 
     fun refresh() {
@@ -105,31 +113,46 @@ class GitHubStatusService(private val project: Project, private val cs: Coroutin
 
     private suspend fun load(repo: GitRepository): GitHubState {
         val coordinates = gitHubCoordinates(repo) ?: return GitHubState.NotOnGitHub
-        val (_, token) = signedInAccount() ?: return GitHubState.NeedsSignIn(coordinates)
+        val (account, token) = signedInAccount() ?: return GitHubState.NeedsSignIn(coordinates)
         return withContext(Dispatchers.IO) {
             try {
-                val api = GitHubApi(token, coordinates)
-                val defaultBranch = defaultBranches.getOrPut(coordinates) { api.defaultBranch() }
+                // In a fork, pull requests live on the original repository, so ask that one.
+                val info = repoInfos.getOrPut(coordinates) { GitHubApi(token, coordinates).repoInfo() }
+                val pullRepo = info.parent ?: coordinates
+                val api = GitHubApi(token, pullRepo)
+                val defaultBranch = info.parentDefaultBranch ?: info.defaultBranch
                 val branch = repo.currentBranch
-                val tracked = branch?.let { GitBranchUtil.getTrackInfoForBranch(repo, it)?.remoteBranch }
+                val trackInfo = branch?.let { GitBranchUtil.getTrackInfoForBranch(repo, it) }
+                val tracked = trackInfo?.remoteBranch
                 val remoteBranch = tracked?.nameForRemoteOperations
+                val headRepo = trackInfo?.remote?.let(::gitHubCoordinates) ?: coordinates
 
                 val pullRequests = api.openPullRequests()
                 val current = remoteBranch?.let { name ->
-                    pullRequests.firstOrNull { it.headRef == name && (it.headRepo == null || it.headRepo.equals(coordinates.fullName, ignoreCase = true)) }
+                    pullRequests.firstOrNull { it.headRef == name && (it.headRepo ?: pullRepo.fullName).equals(headRepo.fullName, ignoreCase = true) }
                 }
-                val currentSha = current?.headSha ?: tracked?.let { repo.branches.getHash(it)?.asString() }
-                val currentChecks = currentSha?.let(api::checks)
+                // A failed checks look-up only hides the CI line; it shouldn't hide the pull requests.
+                val currentChecks = when {
+                    current != null -> pullRequestChecks(api, current)
+                    tracked != null -> repo.branches.getHash(tracked)?.asString()
+                        ?.let { sha -> runCatching { GitHubApi(token, headRepo).checks(sha) }.getOrNull() }
+                    else -> null
+                }
                 val pullRequestChecks = pullRequests.take(CHECKED_PULL_REQUESTS).associate { pr ->
-                    pr.number to if (pr == current) currentChecks else runCatching { api.checks(pr.headSha) }.getOrNull()
+                    pr.number to if (pr == current) currentChecks else pullRequestChecks(api, pr)
                 }
-                GitHubState.Ready(coordinates, defaultBranch, branch?.name, remoteBranch, pullRequests, current, currentChecks, pullRequestChecks)
+                GitHubState.Ready(pullRepo, headRepo, defaultBranch, branch?.name, remoteBranch, pullRequests, current, currentChecks, pullRequestChecks)
             }
             catch (e: GitHubApiException) {
-                GitHubState.Failed(coordinates, e.message.orEmpty())
+                if (e.code == 401) GitHubState.NeedsSignIn(coordinates, expiredAccount = account)
+                else GitHubState.Failed(coordinates, e.message.orEmpty())
             }
         }
     }
+
+    /** Checks on a pull request's latest commit, linking to the pull request's Checks tab. */
+    private fun pullRequestChecks(api: GitHubApi, pr: PullRequest): ChecksSummary? =
+        runCatching { api.checks(pr.headSha) }.getOrNull()?.copy(url = "${pr.url}/checks")
 
     /** A github.com account IntelliJ knows, and its stored token. Never shows a sign-in dialog. */
     suspend fun signedInAccount(): Pair<GithubAccount, String>? {

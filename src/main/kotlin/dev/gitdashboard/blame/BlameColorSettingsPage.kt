@@ -8,7 +8,7 @@ import com.intellij.openapi.options.colors.ColorDescriptor
 import com.intellij.openapi.options.colors.ColorSettingsPage
 import javax.swing.Icon
 
-/** Settings > Editor > Color Scheme > Git Dashboard: lets users recolour the inline blame. */
+/** Settings > Editor > Color Scheme > Git Dashboard: lets users recolour the inline blame and the age stripes. */
 class BlameColorSettingsPage : ColorSettingsPage {
     override fun getDisplayName() = "Git Dashboard"
 
@@ -19,7 +19,10 @@ class BlameColorSettingsPage : ColorSettingsPage {
         AttributesDescriptor("Inline blame//Commit number and hash", BlameColors.COMMIT_ID),
     )
 
-    override fun getColorDescriptors(): Array<ColorDescriptor> = ColorDescriptor.EMPTY_ARRAY
+    override fun getColorDescriptors(): Array<ColorDescriptor> = arrayOf(
+        ColorDescriptor("Commit age stripes//Just changed (bright)", CommitAgeStripes.NEWEST, ColorDescriptor.Kind.FOREGROUND),
+        ColorDescriptor("Commit age stripes//Changed long ago (faded)", CommitAgeStripes.OLDEST, ColorDescriptor.Kind.FOREGROUND),
+    )
 
     override fun getHighlighter(): SyntaxHighlighter = PlainSyntaxHighlighter()
 

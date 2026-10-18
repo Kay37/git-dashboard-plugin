@@ -2,6 +2,7 @@ package dev.gitdashboard.github
 
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vcs.FilePath
+import git4idea.repo.GitRemote
 import git4idea.repo.GitRepository
 import java.net.URLEncoder
 
@@ -9,9 +10,17 @@ private val GITHUB_REMOTE = Regex("""github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$""
 
 /** Owner and name of the first GitHub remote ("origin" preferred), or null if none is on github.com. */
 fun gitHubCoordinates(repo: GitRepository): RepoCoordinates? =
-    repo.remotes.sortedBy { if (it.name == "origin") 0 else 1 }
-        .firstNotNullOfOrNull { remote -> remote.urls.firstNotNullOfOrNull { GITHUB_REMOTE.find(it) } }
+    repo.remotes.sortedBy { if (it.name == "origin") 0 else 1 }.firstNotNullOfOrNull(::gitHubCoordinates)
+
+/** Owner and name of the GitHub repository [remote] points to, or null if it isn't on github.com. */
+fun gitHubCoordinates(remote: GitRemote): RepoCoordinates? =
+    remote.urls.firstNotNullOfOrNull { GITHUB_REMOTE.find(it) }
         ?.destructured?.let { (owner, name) -> RepoCoordinates(owner, name) }
+
+/** The remote that points to [coordinates] ("origin" preferred), e.g. "upstream" for the repository a fork came from. */
+fun gitHubRemote(repo: GitRepository, coordinates: RepoCoordinates): GitRemote? =
+    repo.remotes.sortedBy { if (it.name == "origin") 0 else 1 }
+        .firstOrNull { gitHubCoordinates(it)?.fullName.equals(coordinates.fullName, ignoreCase = true) }
 
 /** "https://github.com/owner/name" for the first GitHub remote ("origin" preferred), or null. */
 fun gitHubRepoUrl(repo: GitRepository): String? = gitHubCoordinates(repo)?.webUrl

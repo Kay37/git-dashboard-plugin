@@ -46,7 +46,11 @@ data class ChecksSummary(val total: Int, val passed: Int, val failed: Int, val r
         }
 }
 
-class GitHubApiException(message: String) : Exception(message)
+/** [code] is GitHub's HTTP status (401 = the sign-in was rejected), or 0 when GitHub couldn't be reached. */
+class GitHubApiException(message: String, val code: Int = 0) : Exception(message)
+
+/** A repository's default branch and, for a fork, the repository it was forked from. */
+data class RepoInfo(val defaultBranch: String, val parent: RepoCoordinates?, val parentDefaultBranch: String?)
 
 /**
  * Minimal GitHub REST client for one repository. Uses IntelliJ's HTTP stack (so the IDE's proxy
@@ -54,8 +58,16 @@ class GitHubApiException(message: String) : Exception(message)
  */
 class GitHubApi(private val token: String, val repo: RepoCoordinates) {
 
-    fun defaultBranch(): String =
-        get("/repos/${repo.fullName}").asJsonObject.string("default_branch") ?: "main"
+    fun repoInfo(): RepoInfo {
+        val json = get("/repos/${repo.fullName}").asJsonObject
+        val parent = json.obj("parent")
+        val parentName = parent?.string("full_name")?.split('/')?.takeIf { it.size == 2 }
+        return RepoInfo(
+            defaultBranch = json.string("default_branch") ?: "main",
+            parent = parentName?.let { (owner, name) -> RepoCoordinates(owner, name) },
+            parentDefaultBranch = parent?.string("default_branch"),
+        )
+    }
 
     /** Open pull requests, most recently updated first. */
     fun openPullRequests(limit: Int = 20): List<PullRequest> =
@@ -127,7 +139,7 @@ class GitHubApi(private val token: String, val repo: RepoCoordinates) {
         catch (e: IOException) {
             throw GitHubApiException("Couldn't reach GitHub. Check your internet connection.")
         }
-        if (code >= 400) throw GitHubApiException(explain(code, text))
+        if (code >= 400) throw GitHubApiException(explain(code, text), code)
         return JsonParser.parseString(text.ifBlank { "{}" })
     }
 

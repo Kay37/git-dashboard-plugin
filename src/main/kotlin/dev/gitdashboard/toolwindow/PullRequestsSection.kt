@@ -22,15 +22,19 @@ import dev.gitdashboard.github.ChecksSummary
 import dev.gitdashboard.github.GitHubState
 import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.github.PullRequest
+import dev.gitdashboard.github.RepoCoordinates
+import dev.gitdashboard.github.gitHubRemote
 import dev.gitdashboard.notifyUser
 import git4idea.branch.GitBrancher
 import git4idea.commands.Git
+import git4idea.repo.GitRemote
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.plugins.github.api.GithubServerPath
+import org.jetbrains.plugins.github.authentication.GHAccountsUtil
 import org.jetbrains.plugins.github.authentication.GHLoginSource
 import org.jetbrains.plugins.github.util.GHCompatibilityUtil
 import java.awt.BorderLayout
@@ -83,11 +87,22 @@ class PullRequestsSection(private val project: Project, parent: Disposable) : JP
         when (state) {
             GitHubState.NotOnGitHub -> {}
             is GitHubState.NeedsSignIn -> {
-                row { secondary("Sign in to GitHub to see pull requests and whether your checks pass.") }
-                row {
-                    link("Sign in to GitHub…") {
-                        if (GHCompatibilityUtil.requestNewAccountForServer(GithubServerPath.DEFAULT_SERVER, project, GHLoginSource.PR_TW) != null) {
-                            service.refresh()
+                val expired = state.expiredAccount
+                if (expired == null) {
+                    row { secondary("Sign in to GitHub to see pull requests and whether your checks pass.") }
+                    row {
+                        link("Sign in to GitHub…") {
+                            if (GHCompatibilityUtil.requestNewAccountForServer(GithubServerPath.DEFAULT_SERVER, project, GHLoginSource.PR_TW) != null) {
+                                service.refresh()
+                            }
+                        }
+                    }
+                }
+                else {
+                    row { secondary("GitHub didn't accept the sign-in for ${expired.name}. It may have expired.") }
+                    row {
+                        link("Sign in to GitHub again…") {
+                            if (GHAccountsUtil.requestReLogin(expired, project, this@PullRequestsSection, loginSource = GHLoginSource.PR_TW) != null) service.refresh()
                         }
                     }
                 }
@@ -101,6 +116,9 @@ class PullRequestsSection(private val project: Project, parent: Disposable) : JP
     }
 
     private fun Panel.ready(repo: GitRepository, state: GitHubState.Ready) {
+        if (state.isFork) {
+            row { secondary("Your fork ${state.headRepo.fullName} · pull requests on ${state.repo.fullName}") }
+        }
         // This branch first: its pull request, or a way to open one.
         val current = state.currentPullRequest
         when {
@@ -120,7 +138,7 @@ class PullRequestsSection(private val project: Project, parent: Disposable) : JP
             else ->
                 row {
                     link("＋ Create Pull Request…") { createPullRequest(project, repo, state) }
-                        .applyToComponent { toolTipText = "Ask to merge ${state.branch} into ${state.defaultBranch}" }
+                        .applyToComponent { toolTipText = "Ask to merge ${state.branch} into ${state.defaultBranch} on ${state.repo.fullName}" }
                 }
         }
         state.currentChecks?.let { checks ->
@@ -141,8 +159,11 @@ class PullRequestsSection(private val project: Project, parent: Disposable) : JP
                 if (checks != null) checksLabel(checks, symbol(checks.state)).applyToComponent { toolTipText = checks.description }
                 link("#${pr.number} ${pr.title.ellipsize(40)}") { BrowserUtil.browse(pr.url) }
                 secondary("${pr.author} · ${relativeTime(pr.updatedAt)}${if (pr.draft) " · draft" else ""}")
-                if (pr.headRepo.equals(state.repo.fullName, ignoreCase = true) && pr.headRef != state.branch) {
-                    link("Check out") { checkOut(repo, pr) }.applyToComponent { toolTipText = "Switch to ${pr.headRef} to try it locally" }
+                // Only offered when one of this project's remotes has the branch (e.g. not for a stranger's fork).
+                val remote = pr.headRepo?.split('/')?.takeIf { it.size == 2 }
+                    ?.let { (owner, name) -> gitHubRemote(repo, RepoCoordinates(owner, name)) }
+                if (remote != null && pr.headRef != state.branch) {
+                    link("Check out") { checkOut(repo, remote, pr) }.applyToComponent { toolTipText = "Switch to ${pr.headRef} to try it locally" }
                 }
             }
         }
@@ -152,8 +173,7 @@ class PullRequestsSection(private val project: Project, parent: Disposable) : JP
     }
 
     /** Fetches the pull request's branch, then switches to it (creating a local tracking branch if needed). */
-    private fun checkOut(repo: GitRepository, pr: PullRequest) {
-        val remote = repo.remotes.firstOrNull { remote -> remote.urls.any { "github.com" in it } } ?: return
+    private fun checkOut(repo: GitRepository, remote: GitRemote, pr: PullRequest) {
         object : Task.Backgroundable(project, "Fetching ${pr.headRef}", false) {
             override fun run(indicator: ProgressIndicator) {
                 Git.getInstance().fetch(repo, remote, emptyList(), "refs/heads/${pr.headRef}:refs/remotes/${remote.name}/${pr.headRef}")

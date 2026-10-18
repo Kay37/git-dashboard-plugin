@@ -49,7 +49,8 @@ import java.awt.event.MouseEvent
 /**
  * Draws the editor decorations for the line under the caret: the blame text at the end of the
  * line, and a tint on every other line that came from the same commit. Only the caret line of the
- * focused editor is decorated, and only once the caret settles.
+ * focused editor is decorated, and only once the caret settles. The focused editor also gets
+ * commit-age stripes in the gutter for the whole file.
  */
 @Service(Service.Level.PROJECT)
 class InlineBlameManager(private val project: Project, private val cs: CoroutineScope) : Disposable {
@@ -108,7 +109,8 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
 
     private fun update(editor: Editor) {
         if (editor.isDisposed) return
-        if (editor.editorKind != EditorKind.MAIN_EDITOR || (!BlameSettings.inlineBlame && !BlameSettings.commitLineMarks)) return clear(editor)
+        if (editor.editorKind != EditorKind.MAIN_EDITOR ||
+            (!BlameSettings.inlineBlame && !BlameSettings.commitLineMarks && !BlameSettings.ageStripes)) return clear(editor)
         val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return clear(editor)
         val repo = GitRepositoryManager.getInstance(project).getRepositoryForFileQuick(file) ?: return clear(editor)
 
@@ -127,6 +129,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         if (caretLine >= document.lineCount) return clear(editor)
 
         val lines = UpToDateLineNumberProviderImpl(document, project)
+        showAgeStripes(editor, annotation, lines)
         val yourEmail = GitUserRegistry.getInstance(project).getUser(repo.root)?.email
         val blame = when (val described = describeLine(annotation, lines, caretLine, yourEmail)) {
             is BlameLine.Committed -> described.copy(
@@ -204,6 +207,38 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.putUserData(COMMIT_LINES, CommitLines(key!!, highlighters))
     }
 
+    /** Gutter stripes for every commit block in the file, coloured by age; redrawn when the text or blame changes. */
+    private fun showAgeStripes(editor: Editor, annotation: GitFileAnnotation?, lines: UpToDateLineNumberProviderImpl) {
+        val document = editor.document
+        val key = annotation?.let { "${System.identityHashCode(it)}@${document.modificationStamp}" }
+        val existing = editor.getUserData(AGE_STRIPES)
+        if (BlameSettings.ageStripes && existing != null && existing.key == key) return
+
+        existing?.highlighters?.forEach { editor.markupModel.removeHighlighter(it) }
+        editor.putUserData(AGE_STRIPES, null)
+        if (!BlameSettings.ageStripes || annotation == null || document.lineCount > MAX_LINES_FOR_STRIPES) return
+
+        val highlighters = CommitAgeStripes.blocks(annotation, lines, document.lineCount).map { block ->
+            CommitAgeStripes.addHighlighter(editor, block) { clicked, event -> onStripeClicked(editor, clicked, event) }
+        }
+        editor.putUserData(AGE_STRIPES, CommitLines(key!!, highlighters))
+    }
+
+    private fun onStripeClicked(editor: Editor, block: CommitAgeStripes.Block, event: MouseEvent) {
+        val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return
+        val repo = GitRepositoryManager.getInstance(project).getRepositoryForFileQuick(file) ?: return
+        val yourEmail = GitUserRegistry.getInstance(project).getUser(repo.root)?.email
+        val info = block.info
+        val hash = info.revisionNumber.asString()
+        val blame = BlameLine.Committed(
+            info,
+            byYou = yourEmail != null && info.authorUser?.email.equals(yourEmail, ignoreCase = true),
+            number = project.service<BlameCache>().commitNumber(repo, hash) {},
+            badges = project.service<CommitBadges>().badgesFor(repo, hash) {}.orEmpty(),
+        )
+        showBlamePopup(project, repo, blame, RelativePoint(event))
+    }
+
     /** Re-measures the blame pill's position (its width depends on the line end and window size). */
     private fun realign(editor: Editor) {
         editor.getUserData(INLAY)?.takeIf { it.isValid }?.update()
@@ -214,6 +249,8 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.putUserData(INLAY, null)
         editor.getUserData(COMMIT_LINES)?.highlighters?.forEach { editor.markupModel.removeHighlighter(it) }
         editor.putUserData(COMMIT_LINES, null)
+        editor.getUserData(AGE_STRIPES)?.highlighters?.forEach { editor.markupModel.removeHighlighter(it) }
+        editor.putUserData(AGE_STRIPES, null)
         editor.putUserData(HIGHLIGHTED_COMMIT, null)
         editor.putUserData(HIGHLIGHT_REQUESTED, null)
     }
@@ -253,6 +290,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
     private companion object {
         val INLAY = Key.create<Inlay<BlameInlayRenderer>>("gitDashboard.blameInlay")
         val COMMIT_LINES = Key.create<CommitLines>("gitDashboard.sameCommitLines")
+        val AGE_STRIPES = Key.create<CommitLines>("gitDashboard.ageStripes")
         /** Commit whose lines are lit up on request, while the caret stays on it. */
         val HIGHLIGHTED_COMMIT = Key.create<String>("gitDashboard.highlightedCommit")
         /** Set by a double-click or the shortcut; the next update resolves it to the caret line's commit. */
@@ -260,6 +298,8 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
 
         /** Scanning every line on each caret move is cheap for normal files; skip huge ones. */
         const val MAX_LINES_FOR_MARKS = 5000
+        /** Stripes are one highlighter per commit block, so they're fine on much larger files. */
+        const val MAX_LINES_FOR_STRIPES = 30_000
 
         val SAME_COMMIT_BACKGROUND = JBColor(Color(64, 128, 255, 20), Color(90, 150, 255, 24))
         val SAME_COMMIT_STRIPE = JBColor(Color(64, 128, 255), Color(90, 150, 255))

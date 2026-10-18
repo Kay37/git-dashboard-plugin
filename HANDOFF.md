@@ -2,7 +2,7 @@
 
 Read `CLAUDE.md` first (build commands, conventions, user preferences, code map).
 
-## Done and pushed (`origin/main` = `076a63b`)
+## Done and pushed (`origin/main` = `dca7665`)
 
 1. Panel scaffold + status card (branch, ↑/↓ vs upstream).
 2. Commit & Push flow: changed-files tree with checkboxes (untracked included), message box,
@@ -18,22 +18,30 @@ Read `CLAUDE.md` first (build commands, conventions, user preferences, code map)
 7. Status bar chips: branch ▾ (opens switcher), solid ↑ push / ↓ pull, ✓ Synced, spinner, publish,
    conflict; right-click menu.
 8. Branch switcher popup: search, switch (smart checkout), New Branch, Delete key, Delete Merged.
+9. GitHub pull requests & CI: `github/GitHubApi.kt` (REST client), `github/GitHubStatusService.kt`
+   (shared PR/CI state, polling), `toolwindow/PullRequestsSection.kt`, `toolwindow/CreatePullRequest.kt`,
+   PR / CI chips in `statusbar/SyncStatusBarWidget.kt`.
+10. Workflow kit (from the DHARMA project): `scripts/restart-test-ide.ps1`, `scripts/context.mjs` +
+    `.claude/settings.json` (status line and 250k budget warning), `/wrap-up` skill, Working rules in `CLAUDE.md`.
 
-## Committed, not yet pushed (2026-10-18)
+## Committed, not yet pushed (2026-10-18) — user tried the stripes and said they work
 
-**GitHub pull requests & CI** (last item of the original v1 list): user tried it and said it works.
-`github/GitHubApi.kt` (REST client), `github/GitHubStatusService.kt` (shared PR/CI state, polling),
-`toolwindow/PullRequestsSection.kt`, `toolwindow/CreatePullRequest.kt`, PR / CI chips in
-`statusbar/SyncStatusBarWidget.kt`. Edge cases still worth a look: repos with no CI (no CI chip),
-forks, a signed-out GitHub account (panel should offer "Sign in to GitHub…").
+**Commit age stripes** (`blame/CommitAgeStripes.kt`, wired in `InlineBlameManager.showAgeStripes`):
+a rounded stripe in the gutter's left edge per run of lines from one commit, colour mixed from
+"faded" to "bright" by age (log scale, fully faded at 2 years); hover = who/when/subject, click =
+commit card. Toggle "Show Commit Age Stripes in the Gutter" (`gitDashboard.ageStripes`, default on);
+colours are `ColorKey`s on the Git Dashboard colour page.
 
-**Workflow kit** (from the DHARMA project): `scripts/restart-test-ide.ps1`, `scripts/context.mjs`
-+ `.claude/settings.json` (status line and 250k budget warning), `/wrap-up` skill, Working rules in
-`CLAUDE.md`. Push both when the user says "push".
+**PR & CI edge cases** (reviewed in code; no fork or expired token was available to click through):
+- No CI: `checks()` already returns null → no chip. Fixed: a failed checks call no longer hides the PRs.
+- Forks: PRs are now read from / opened on the parent repo (`RepoInfo.parent`), head `owner:branch`,
+  current PR matched by head repo; "Check out" only for PRs whose repo is one of the project's remotes.
+- Signed out: no account → "Sign in to GitHub…" (unchanged). Rejected token (401) → "Sign in to GitHub
+  again…" (`requestReLogin`). Account changes in Settings refresh the panel at once (`accountsState`).
 
 ## Ideas the user liked (backlog)
 
-- Colour blame by commit age; gutter stripes per commit block; file summary above line 1
+- File summary above line 1
   ("3 authors · last changed 2 days ago"); scrollbar map of not-committed / not-pushed / new lines.
 - Line history ("how this line changed"), "undo my change to these lines".
 - Commit history list with revert / copy hash / open on GitHub; stash shelf;
