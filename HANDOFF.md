@@ -1,8 +1,8 @@
-# Hand-off — state as of 2026-10-18
+# Hand-off — state as of 2026-10-19
 
 Read `CLAUDE.md` first (build commands, conventions, user preferences, code map).
 
-## Done and pushed (`origin/main` = `dca7665`)
+## Done and pushed (`origin/main` = `ee4f976`)
 
 1. Panel scaffold + status card (branch, ↑/↓ vs upstream).
 2. Commit & Push flow: changed-files tree with checkboxes (untracked included), message box,
@@ -24,7 +24,16 @@ Read `CLAUDE.md` first (build commands, conventions, user preferences, code map)
 10. Workflow kit (from the DHARMA project): `scripts/restart-test-ide.ps1`, `scripts/context.mjs` +
     `.claude/settings.json` (status line and 250k budget warning), `/wrap-up` skill, Working rules in `CLAUDE.md`.
 
-## Committed, not yet pushed (2026-10-18) — user tried the stripes and said they work
+11. **Commit age stripes** (`bd2865f`; the user tried them and said they work) and PR & CI edge cases (details below).
+12. **Blame crash fix on file reload** (`ee4f976`, 2026-10-19). After a pull/checkout the editor's line
+    table can lag the text, so `getLineEndOffset` returned an offset past `textLength` and
+    `calcWidthInPixels` threw "Wrong offset: 2044. Should be in range: [0, 663]" (not during
+    `isInBulkUpdate`, so that check alone wasn't enough). `InlineBlameManager.update` re-queues during
+    a bulk update; `showInlay` re-queues when the line end lies past the text; `calcWidthInPixels`
+    returns a plain width in both cases. Installed in the user's IntelliJ; no errors in `idea.log`
+    since, but **not yet confirmed by a pull or branch switch**.
+
+## Details: commit age stripes and PR & CI edge cases
 
 **Commit age stripes** (`blame/CommitAgeStripes.kt`, wired in `InlineBlameManager.showAgeStripes`):
 a rounded stripe in the gutter's left edge per run of lines from one commit, colour mixed from
@@ -38,6 +47,13 @@ colours are `ColorKey`s on the Git Dashboard colour page.
   current PR matched by head repo; "Check out" only for PRs whose repo is one of the project's remotes.
 - Signed out: no account → "Sign in to GitHub…" (unchanged). Rejected token (401) → "Sign in to GitHub
   again…" (`requestReLogin`). Account changes in Settings refresh the panel at once (`accountsState`).
+
+## Next steps
+
+1. Confirm the crash fix: with a file open, Git → Pull or switch branches; watch for the error popup.
+   If it recurs, the stack trace's line numbers show which build is running.
+2. Click through the fork and expired-sign-in cases above when one is available.
+3. Then pick from the backlog with the user.
 
 ## Ideas the user liked (backlog)
 
