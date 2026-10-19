@@ -109,6 +109,12 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
 
     private fun update(editor: Editor) {
         if (editor.isDisposed) return
+        // During a bulk change (reload after pull/checkout, big paste) the line table lags the text,
+        // so line/offset lookups throw. Try again once the change is done.
+        if (editor.document.isInBulkUpdate) {
+            updates.tryEmit(editor)
+            return
+        }
         if (editor.editorKind != EditorKind.MAIN_EDITOR ||
             (!BlameSettings.inlineBlame && !BlameSettings.commitLineMarks && !BlameSettings.ageStripes)) return clear(editor)
         val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return clear(editor)
@@ -173,8 +179,14 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.putUserData(INLAY, null)
         if (!BlameSettings.inlineBlame) return
 
+        // Right after a reload the line table can still point past the end of the new text. Try again shortly.
+        val offset = editor.document.getLineEndOffset(line)
+        if (offset > editor.document.textLength) {
+            updates.tryEmit(editor)
+            return
+        }
         val properties = InlayProperties().relatesToPrecedingText(true).disableSoftWrapping(true)
-        val inlay = editor.inlayModel.addAfterLineEndElement(editor.document.getLineEndOffset(line), properties, BlameInlayRenderer(blame))
+        val inlay = editor.inlayModel.addAfterLineEndElement(offset, properties, BlameInlayRenderer(blame))
         editor.putUserData(INLAY, inlay)
     }
 

@@ -35,6 +35,9 @@ class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
     override fun calcWidthInPixels(inlay: Inlay<*>): Int {
         val editor = inlay.editor
         val content = contentWidth(editor)
+        // Mid bulk change the line table lags the text; measure properly on the next update.
+        // The same lag can leave the inlay past the end of the text, where line lookups throw.
+        if (editor.document.isInBulkUpdate || inlay.offset > editor.document.textLength) return GAP.get() + content
         val lineEndX = editor.offsetToXY(inlay.offset).x
         val minimumStart = lineEndX + GAP.get()
         if (!BlameSettings.alignRight) return minimumStart - lineEndX + content
