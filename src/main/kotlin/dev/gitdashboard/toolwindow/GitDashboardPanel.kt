@@ -21,7 +21,6 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.Disposer
-import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.vcs.changes.ChangeListListener
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.ui.JBColor
@@ -34,6 +33,7 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import dev.gitdashboard.GitDashboardScope
 import dev.gitdashboard.git.GitOperationException
+import dev.gitdashboard.git.LocalChanges
 import dev.gitdashboard.git.RepoStatus
 import dev.gitdashboard.git.collectLocalChanges
 import dev.gitdashboard.git.lastCommitSubject
@@ -42,6 +42,7 @@ import dev.gitdashboard.git.undoLastCommit
 import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.notifyUser
 import dev.gitdashboard.pluralize
+import dev.gitdashboard.refreshRound
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
 import kotlinx.coroutines.Dispatchers
@@ -92,8 +93,11 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         val job = project.service<GitDashboardScope>().cs.launch {
             // Git fires several events per operation; settle before running git again.
             refreshRequests.debounce(200).collectLatest {
-                val (statuses, changes) = withContext(Dispatchers.IO) { loadRepoStatuses(project) to collectLocalChanges(project) }
-                withContext(Dispatchers.EDT) { render(statuses, changes) }
+                // One failed round (git or the IDE threw) leaves the last view up; the next change tries again.
+                refreshRound("the Git Dashboard panel") {
+                    val (statuses, changes) = withContext(Dispatchers.IO) { loadRepoStatuses(project) to collectLocalChanges(project) }
+                    withContext(Dispatchers.EDT) { render(statuses, changes) }
+                }
             }
         }
         Disposer.register(this) { job.cancel() }
@@ -112,11 +116,11 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         }, this)
     }
 
-    private fun render(statuses: List<RepoStatus>, changes: List<Change>) {
+    private fun render(statuses: List<RepoStatus>, changes: LocalChanges) {
         this.statuses = statuses
         cards.removeAll()
         statuses.forEach { cards.add(createCard(it, showRepoName = statuses.size > 1)) }
-        commitSection.setChanges(changes)
+        commitSection.setChanges(changes.changes, changes.untracked)
 
         // With no repository, the empty-state message (and its Create link) gets the whole panel.
         content.removeAll()

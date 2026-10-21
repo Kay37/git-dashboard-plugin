@@ -9,6 +9,7 @@ import dev.gitdashboard.git.UnpushedCommit
 import dev.gitdashboard.git.listUnpushedCommits
 import dev.gitdashboard.git.pushCurrentBranch
 import dev.gitdashboard.notifyUser
+import dev.gitdashboard.saveOpenFiles
 import git4idea.branch.GitBranchUtil
 import git4idea.repo.GitRepository
 
@@ -17,6 +18,7 @@ import git4idea.repo.GitRepository
  * one unpushed commit. A single commit (or a branch that is only being published) is pushed directly.
  */
 fun pushWithChoice(project: Project, repo: GitRepository, onFinished: () -> Unit = {}) {
+    saveOpenFiles()
     object : Task.Backgroundable(project, "Reading unpushed commits", false) {
         private var commits: List<UnpushedCommit> = emptyList()
 
@@ -39,8 +41,10 @@ fun pushWithChoice(project: Project, repo: GitRepository, onFinished: () -> Unit
 }
 
 /** Pushes the whole current branch of each repository, with no questions asked. */
-fun pushInBackground(project: Project, repos: Collection<GitRepository>, onFinished: () -> Unit = {}) =
+fun pushInBackground(project: Project, repos: Collection<GitRepository>, onFinished: () -> Unit = {}) {
+    saveOpenFiles()
     runPush(project, repos.map { it to null }, onFinished)
+}
 
 /** @param targets each repository with the newest commit to push, or null for its whole branch. */
 private fun runPush(project: Project, targets: List<Pair<GitRepository, String?>>, onFinished: () -> Unit) {

@@ -28,6 +28,7 @@ import dev.gitdashboard.github.PullRequest
 import dev.gitdashboard.github.RepoCoordinates
 import dev.gitdashboard.github.gitHubRemote
 import dev.gitdashboard.notifyUser
+import dev.gitdashboard.saveOpenFiles
 import git4idea.branch.GitBranchUtil
 import git4idea.commands.GitCommand
 import git4idea.repo.GitRepository
@@ -73,6 +74,7 @@ fun createPullRequest(project: Project, repo: GitRepository, state: GitHubState.
 
 private fun submit(project: Project, repo: GitRepository, coordinates: RepoCoordinates, head: String, dialog: CreatePullRequestDialog) {
     val service = project.service<GitHubStatusService>()
+    saveOpenFiles()
     object : Task.Backgroundable(project, "Creating pull request", false) {
         private var created: PullRequest? = null
 

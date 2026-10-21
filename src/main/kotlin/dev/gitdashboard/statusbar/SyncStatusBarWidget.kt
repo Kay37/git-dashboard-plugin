@@ -30,6 +30,7 @@ import dev.gitdashboard.github.ChecksSummary
 import dev.gitdashboard.github.GitHubState
 import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.pluralize
+import dev.gitdashboard.refreshRound
 import dev.gitdashboard.toolwindow.publishToGitHub
 import dev.gitdashboard.toolwindow.pushWithChoice
 import dev.gitdashboard.toolwindow.resolveConflicts
@@ -86,19 +87,24 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
             override fun selectionChanged(event: FileEditorManagerEvent) = requestRefresh()
         })
 
+        // A failed round keeps the chips as they were; the next change or GitHub update tries again.
         scope.launch {
             refreshRequests.debounce(250).collectLatest {
-                val current = withContext(Dispatchers.IO) {
-                    currentRepository()?.let { repo -> loadRepoStatuses(project).find { it.repository == repo } }
-                }
-                withContext(Dispatchers.EDT) {
-                    status = current
-                    render()
+                refreshRound("the status bar chips") {
+                    val current = withContext(Dispatchers.IO) {
+                        currentRepository()?.let { repo -> loadRepoStatuses(project).find { it.repository == repo } }
+                    }
+                    withContext(Dispatchers.EDT) {
+                        status = current
+                        render()
+                    }
                 }
             }
         }
         scope.launch {
-            project.service<GitHubStatusService>().states.collect { withContext(Dispatchers.EDT) { render() } }
+            project.service<GitHubStatusService>().states.collect {
+                refreshRound("the status bar's GitHub chips") { withContext(Dispatchers.EDT) { render() } }
+            }
         }
         requestRefresh()
     }

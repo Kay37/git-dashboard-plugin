@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import dev.gitdashboard.refreshRound
 import git4idea.branch.GitBranchUtil
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
@@ -95,8 +96,14 @@ class GitHubStatusService(private val project: Project, private val cs: Coroutin
     private fun startLoops() {
         cs.launch {
             refreshRequests.debounce(1500).collectLatest {
-                val repos = GitRepositoryManager.getInstance(project).repositories
-                _states.value = repos.associate { it.root to load(it) }
+                refreshRound("GitHub pull requests and CI") {
+                    val repos = GitRepositoryManager.getInstance(project).repositories
+                    // An answer that can't be read (say, a Wi-Fi sign-in page instead of GitHub) fails that
+                    // repository's round only; the loop keeps going and the next refresh tries again.
+                    _states.value = repos.associate { repo ->
+                        repo.root to (refreshRound("GitHub status of ${repo.root.name}") { load(repo) } ?: unreadable(repo))
+                    }
+                }
             }
         }
         cs.launch {
@@ -149,6 +156,11 @@ class GitHubStatusService(private val project: Project, private val cs: Coroutin
             }
         }
     }
+
+    private fun unreadable(repo: GitRepository): GitHubState =
+        gitHubCoordinates(repo)?.let {
+            GitHubState.Failed(it, "GitHub's answer couldn't be read (a Wi-Fi sign-in page, maybe). Trying again in a few minutes.")
+        } ?: GitHubState.NotOnGitHub
 
     /** Checks on a pull request's latest commit, linking to the pull request's Checks tab. */
     private fun pullRequestChecks(api: GitHubApi, pr: PullRequest): ChecksSummary? =

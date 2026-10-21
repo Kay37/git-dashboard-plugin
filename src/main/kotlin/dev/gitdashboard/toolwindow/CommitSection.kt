@@ -27,6 +27,7 @@ import dev.gitdashboard.git.pushCurrentBranch
 import dev.gitdashboard.git.repository
 import dev.gitdashboard.notifyUser
 import dev.gitdashboard.pluralize
+import dev.gitdashboard.saveOpenFiles
 import git4idea.repo.GitRepository
 import java.awt.BorderLayout
 import java.awt.FlowLayout
@@ -39,7 +40,8 @@ import javax.swing.event.DocumentEvent
 
 /**
  * Changed files with checkboxes, a message box and Commit / Commit & Push buttons.
- * Every change is included by default; files the user unticks stay unticked across refreshes.
+ * Changed files are included by default and new files aren't; the user's ticks and unticks stay
+ * put across refreshes.
  */
 class CommitSection(
     private val project: Project,
@@ -69,6 +71,12 @@ class CommitSection(
 
     /** Paths the user unticked; remembered so a refresh doesn't tick them again. */
     private val excludedPaths = mutableSetOf<FilePath>()
+    /**
+     * New (untracked) files start unticked, like in IntelliJ's own commit, so a password file or
+     * build output never goes in by accident. These are the ones the user ticked.
+     */
+    private val chosenNewPaths = mutableSetOf<FilePath>()
+    private var newPaths: Set<FilePath> = emptySet()
     private var updatingInclusion = false
     private var busy = false
 
@@ -102,12 +110,19 @@ class CommitSection(
         updateControls()
     }
 
-    /** Replaces the displayed changes, keeping the user's unticked files unticked. Call on the EDT. */
-    fun setChanges(changes: List<Change>) {
+    /**
+     * Replaces the displayed changes. Changed files are ticked unless the user unticked them; new
+     * [untracked] files stay unticked unless the user ticked them. Call on the EDT.
+     */
+    fun setChanges(changes: List<Change>, untracked: Set<FilePath>) {
+        newPaths = untracked
         updatingInclusion = true
         try {
             tree.setChangesToDisplay(changes)
-            tree.setIncludedChanges(changes.filter { pathOf(it) !in excludedPaths })
+            tree.setIncludedChanges(changes.filter { change ->
+                val path = pathOf(change)
+                if (path in untracked) path in chosenNewPaths else path !in excludedPaths
+            })
         }
         finally {
             updatingInclusion = false
@@ -118,18 +133,27 @@ class CommitSection(
     private fun onInclusionChanged() {
         if (updatingInclusion) return
         excludedPaths.clear()
-        tree.changes.filterNot { tree.isIncluded(it) }.mapTo(excludedPaths) { pathOf(it) }
+        chosenNewPaths.clear()
+        for (change in tree.changes) {
+            val path = pathOf(change)
+            val included = tree.isIncluded(change)
+            if (path in newPaths) { if (included) chosenNewPaths += path }
+            else if (!included) excludedPaths += path
+        }
         updateControls()
     }
 
     private fun updateControls() {
         val total = tree.changes.size
         val included = tree.includedChanges.size
+        val newLeftOut = tree.changes.count { pathOf(it) in newPaths && !tree.isIncluded(it) }
         selectionLabel.text = when {
             total == 0 -> ""
             included == total -> pluralize(total, "file")
             else -> "$included of $total selected"
-        }
+        } + if (newLeftOut > 0) " · ${pluralize(newLeftOut, "new file")} not ticked" else ""
+        selectionLabel.toolTipText = if (newLeftOut == 0) null
+            else "New files start unticked, so passwords or build output don't get committed by accident. Tick the ones you want to add."
         val canCommit = !busy && included > 0 && messageArea.text.isNotBlank()
         commitButton.isEnabled = canCommit
         commitAndPushButton.isEnabled = canCommit
@@ -143,6 +167,8 @@ class CommitSection(
     }
 
     private fun commit(push: Boolean) {
+        // Git commits what's on disk: save first, so the commit has the latest typing.
+        saveOpenFiles()
         val message = messageArea.text.trim()
         val included = tree.includedChanges.toList()
         if (busy || message.isEmpty() || included.isEmpty()) return
@@ -195,6 +221,7 @@ class CommitSection(
                 if (committed) {
                     messageArea.text = ""
                     excludedPaths.clear()
+                    chosenNewPaths.clear()
                 }
                 busy = false
                 updateControls()

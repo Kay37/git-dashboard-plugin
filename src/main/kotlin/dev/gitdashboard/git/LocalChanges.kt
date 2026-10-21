@@ -9,18 +9,19 @@ import com.intellij.openapi.vcs.changes.CurrentContentRevision
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryManager
 
+/** Uncommitted changes, and which of them are new files Git doesn't track yet. */
+data class LocalChanges(val changes: List<Change>, val untracked: Set<FilePath>)
+
 /**
  * Uncommitted changes in the project's Git repositories. Untracked (new, never added) files are
- * included as additions, so the user sees and commits them like any other change.
+ * listed as additions, so the user sees them and can tick the ones to commit.
  */
-fun collectLocalChanges(project: Project): List<Change> {
+fun collectLocalChanges(project: Project): LocalChanges {
     val changeListManager = ChangeListManager.getInstance(project)
     val repositories = GitRepositoryManager.getInstance(project)
     val tracked = changeListManager.allChanges.filter { repositories.getRepositoryForFileQuick(ChangesUtil.getFilePath(it)) != null }
-    val untracked = changeListManager.unversionedFilesPaths
-        .filter { repositories.getRepositoryForFileQuick(it) != null }
-        .map { Change(null, CurrentContentRevision(it)) }
-    return tracked + untracked
+    val untrackedPaths = changeListManager.unversionedFilesPaths.filter { repositories.getRepositoryForFileQuick(it) != null }
+    return LocalChanges(tracked + untrackedPaths.map { Change(null, CurrentContentRevision(it)) }, untrackedPaths.toSet())
 }
 
 fun Change.repository(project: Project): GitRepository? =

@@ -18,11 +18,14 @@ import dev.gitdashboard.git.finishOperation
 import dev.gitdashboard.git.syncCurrentBranch
 import dev.gitdashboard.notifyUser
 import dev.gitdashboard.pluralize
+import dev.gitdashboard.saveOpenFiles
 import git4idea.GitVcs
 import git4idea.repo.GitRepository
 
 /** Fetches, pulls and pushes [repo]'s current branch; opens the merge dialog if the pull hits conflicts. */
 fun syncInBackground(project: Project, repo: GitRepository, onFinished: () -> Unit = {}) {
+    // A pull rewrites files on disk: save first, so it never lands under unsaved edits.
+    saveOpenFiles()
     object : Task.Backgroundable(project, "Syncing ${repo.root.name}", true) {
         private lateinit var result: SyncResult
 
@@ -65,6 +68,8 @@ fun resolveConflicts(project: Project, repo: GitRepository, onFinished: () -> Un
 }
 
 private fun finishThenSync(project: Project, repo: GitRepository, onFinished: () -> Unit) {
+    // Resolved files may still be open with edits, and continuing a rebase rewrites files.
+    saveOpenFiles()
     object : Task.Backgroundable(project, "Finishing ${repo.root.name}", false) {
         override fun run(indicator: ProgressIndicator) = finishOperation(project, repo)
 
@@ -99,6 +104,7 @@ fun abortWithConfirmation(project: Project, repo: GitRepository, onFinished: () 
     )
     if (answer != Messages.OK) return
 
+    saveOpenFiles()
     object : Task.Backgroundable(project, "Aborting $operation", false) {
         override fun run(indicator: ProgressIndicator) = abortOperation(project, repo)
         override fun onSuccess() = notifyUser(project, NotificationType.INFORMATION, "${operation.replaceFirstChar { it.uppercase() }} aborted")
