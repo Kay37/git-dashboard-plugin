@@ -1,5 +1,6 @@
 package dev.gitdashboard
 
+import com.intellij.openapi.application.WriteIntentReadAction
 import com.intellij.openapi.diagnostic.ControlFlowException
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
@@ -11,8 +12,11 @@ private val LOG = Logger.getInstance("dev.gitdashboard.Guards")
  * Writes every edited file to disk, so git works on what's on screen: a commit includes the
  * latest typing, and a pull never rewrites a file under unsaved edits. IntelliJ's own commit and
  * update do the same. Call on the EDT, right before starting the git work.
+ *
+ * Saving needs IntelliJ's write-intent lock, which a Swing button click doesn't hold on its own
+ * (clicking Commit and Push crashed with "Access is allowed from write thread only"), so take it here.
  */
-fun saveOpenFiles() = FileDocumentManager.getInstance().saveAllDocuments()
+fun saveOpenFiles() = WriteIntentReadAction.run { FileDocumentManager.getInstance().saveAllDocuments() }
 
 /**
  * Runs one round of a refresh loop. An unexpected error (say, a Wi-Fi sign-in page answering
