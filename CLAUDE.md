@@ -57,10 +57,11 @@ Adopted from the user's DHARMA Initiative project (2026-10-18), trimmed to what 
 
 ## Build & run
 
-There is no `mvn` on PATH and no `JAVA_HOME`; use IntelliJ's bundled Maven with JDK 21:
+There is no `mvn` on PATH and no `JAVA_HOME`; use IntelliJ's bundled Maven with IntelliJ's own Java (`jbr`, JDK 25). The old
+`C:\Program Files\Java\jdk-21` is no longer installed (2026-10-26):
 
 ```bash
-export JAVA_HOME="/c/Program Files/Java/jdk-21"
+export JAVA_HOME="/c/Program Files/JetBrains/IntelliJ IDEA 2026.2.3/jbr"
 MVN="/c/Program Files/JetBrains/IntelliJ IDEA 2026.2.3/plugins/maven-plugin/lib/maven3/bin/mvn"
 "$MVN" -B -ntp -q compile                    # quick compile check
 "$MVN" -B -ntp -q package exec:exec@run-ide  # build, install into sandbox, launch test IDE
@@ -92,7 +93,7 @@ There are no sources; inspect the installed jars with `javap` (Windows paths via
 ```bash
 IDE="/c/Program Files/JetBrains/IntelliJ IDEA 2026.2.3"
 CP="$(for j in "$IDE/plugins/vcs-git/lib/vcs-git.jar" "$IDE"/lib/intellij.platform.vcs*.jar; do printf '%s;' "$(cygpath -w "$j")"; done)"
-"/c/Program Files/Java/jdk-21/bin/javap.exe" -cp "$CP" git4idea.branch.GitBrancher
+"/c/Users/kimba/.jdks/corretto-17.0.20.1/bin/javap.exe" -cp "$CP" git4idea.branch.GitBrancher
 ```
 
 To find which jar holds a class: loop over `"$IDE"/lib/*.jar` with `unzip -l | grep 'path/Name.class'`.

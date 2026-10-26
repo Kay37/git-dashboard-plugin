@@ -13,8 +13,11 @@ $project = Split-Path -Parent $PSScriptRoot
 $sandbox = Join-Path $env:USERPROFILE '.idea-sandbox\git-dashboard'
 $pidFile = Join-Path $sandbox 'system\.pid'
 $log = Join-Path $sandbox 'log\idea.log'
-$env:JAVA_HOME = 'C:\Program Files\Java\jdk-21'
-$mvn = 'C:\Program Files\JetBrains\IntelliJ IDEA 2026.2.3\plugins\maven-plugin\lib\maven3\bin\mvn.cmd'
+# Build with the Java that comes with IntelliJ (its jbr folder), so no separate JDK has to be installed.
+# After an IntelliJ update, change the version in this path.
+$ideaHome = 'C:\Program Files\JetBrains\IntelliJ IDEA 2026.2.3'
+$env:JAVA_HOME = Join-Path $ideaHome 'jbr'
+$mvn = Join-Path $ideaHome 'plugins\maven-plugin\lib\maven3\bin\mvn.cmd'
 
 function Get-TestIde {
     if (-not (Test-Path $pidFile)) { return $null }
