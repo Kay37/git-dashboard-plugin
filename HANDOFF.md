@@ -1,71 +1,82 @@
-# Hand-off — state as of 2026-10-19
+# Hand-off — state as of 2026-11-03
 
 Read `CLAUDE.md` first (build commands, conventions, user preferences, code map).
 
-## Done and pushed (`origin/main` = `ee4f976`)
+## Where the code is
 
-1. Panel scaffold + status card (branch, ↑/↓ vs upstream).
-2. Commit & Push flow: changed-files tree with checkboxes (untracked included), message box,
-   Commit / Commit & Push (Ctrl+Enter), Undo Last Commit.
-3. Standalone Push with "push up to this commit" picker.
-4. One-click Sync: fetch → fast-forward / merge (or rebase if `pull.rebase`) with autostash → push;
-   conflicts open IntelliJ's merge dialog, then finish/continue; Resolve/Abort on the card.
-5. Create Git repository, Publish to GitHub (private by default), Remotes dialog.
-6. Inline blame pill on the caret line: author initials circle, "You", relative date, subject,
-   `#N shorthash`, ↑ Not pushed / ✦ New badges; click → commit card; right-aligned at the margin
-   guide; same-commit tint on double-click or Alt+Shift+B; Copy GitHub Link to Line; colours under
-   Settings → Editor → Color Scheme → Git Dashboard; toggles in the editor right-click menu.
-7. Status bar chips: branch ▾ (opens switcher), solid ↑ push / ↓ pull, ✓ Synced, spinner, publish,
-   conflict; right-click menu.
-8. Branch switcher popup: search, switch (smart checkout), New Branch, Delete key, Delete Merged.
-9. GitHub pull requests & CI: `github/GitHubApi.kt` (REST client), `github/GitHubStatusService.kt`
-   (shared PR/CI state, polling), `toolwindow/PullRequestsSection.kt`, `toolwindow/CreatePullRequest.kt`,
-   PR / CI chips in `statusbar/SyncStatusBarWidget.kt`.
-10. Workflow kit (from the DHARMA project): `scripts/restart-test-ide.ps1`, `scripts/context.mjs` +
-    `.claude/settings.json` (status line and 250k budget warning), `/wrap-up` skill, Working rules in `CLAUDE.md`.
+`origin/main` = `c3857e4` (unchanged this session). This session's work is on branch
+**`claude/elegant-dijkstra-38q6jz`** (`9b67d86`), not merged into `main`. The user was sent the
+built zip to install from disk. On 2026-11-03 they said they don't want to test each change
+(user, 2026-11-03): fix the items, commit, push, give them the plugin.
 
-11. **Commit age stripes** (`bd2865f`; the user tried them and said they work) and PR & CI edge cases (details below).
-12. **Blame crash fix on file reload** (`ee4f976`, 2026-10-19). After a pull/checkout the editor's line
-    table can lag the text, so `getLineEndOffset` returned an offset past `textLength` and
-    `calcWidthInPixels` threw "Wrong offset: 2044. Should be in range: [0, 663]" (not during
-    `isInBulkUpdate`, so that check alone wasn't enough). `InlineBlameManager.update` re-queues during
-    a bulk update; `showInlay` re-queues when the line end lies past the text; `calcWidthInPixels`
-    returns a plain width in both cases. Installed in the user's IntelliJ; no errors in `idea.log`
-    since, but **not yet confirmed by a pull or branch switch**.
+## Done this session (on the branch, compile-checked, not yet tried in an IDE)
 
-## Details: commit age stripes and PR & CI edge cases
+1. **Status bar "last commit" chip** (`🕑 2h ago`, after the branch chip). The tooltip shows date,
+   subject and author; a click opens the commit in IntelliJ's Git log (`VcsLogNavigationUtil`).
+2. **Background check for new commits** (`git/BackgroundFetch.kt`). Fetches the tracked remote
+   30 s after open, every 10 min, and on return to the IDE after 5+ min away. Uses
+   `AuthenticationMode.SILENT`, so it never shows a password prompt. Skips Power Save Mode.
+   `fetchLock` is shared with Sync's fetch. The ↑/↓/✓ tooltips say "Checked for new commits …"
+   (from FETCH_HEAD's date) or why the check failed. Right-click → Refresh now fetches first. A
+   tick-box toggles the timer (`gitDashboard.autoFetch`).
+3. **Right-click past the line end** gets IntelliJ's normal menu. The Git Dashboard menu shows
+   only on the drawn pill (`BlameInlayRenderer.isOverContent`).
+4. **Design fixes 1–4:**
+   - Left-clicks and the hand cursor work only on the pill itself.
+   - A conflict during Sync shows the "Sync paused" balloon instead of opening the merge dialog.
+   - Double-click no longer lights up a commit (Alt+Shift+B does).
+   - No pill on uncommitted lines or untracked files.
 
-**Commit age stripes** (`blame/CommitAgeStripes.kt`, wired in `InlineBlameManager.showAgeStripes`):
-a rounded stripe in the gutter's left edge per run of lines from one commit, colour mixed from
-"faded" to "bright" by age (log scale, fully faded at 2 years); hover = who/when/subject, click =
-commit card. Toggle "Show Commit Age Stripes in the Gutter" (`gitDashboard.ageStripes`, default on);
-colours are `ColorKey`s on the Git Dashboard colour page.
+## Next steps: remaining design items (user asked for all of them, 2026-11-03)
 
-**PR & CI edge cases** (reviewed in code; no fork or expired token was available to click through):
-- No CI: `checks()` already returns null → no chip. Fixed: a failed checks call no longer hides the PRs.
-- Forks: PRs are now read from / opened on the parent repo (`RepoInfo.parent`), head `owner:branch`,
-  current PR matched by head repo; "Check out" only for PRs whose repo is one of the project's remotes.
-- Signed out: no account → "Sign in to GitHub…" (unchanged). Rejected token (401) → "Sign in to GitHub
-  again…" (`requestReLogin`). Account changes in Settings refresh the panel at once (`accountsState`).
+5. **Balloons:**
+   - No "Synced" balloon when nothing changed (`SyncTask.kt` onSuccess).
+   - A second notification group, `STICKY_BALLOON`, for ERROR/WARNING in `notifyUser`.
+6. **Commit shortcuts** (`CommitSection.kt:106`):
+   - Ctrl+Enter = Commit; Ctrl+Alt+K = Commit & Push.
+   - Update the empty-text hint at :64.
+7. **False green ✓:** when `ahead`/`behind` is null but upstream exists, show a grey
+   "? origin/x — couldn't compare" chip instead of ✓ Synced (`SyncStatusBarWidget.stateChips`).
+8. **One project-wide "sync running" flag** (a service) that the panel and chip both check and
+   show. Today `syncing` is local to the widget.
+9. **Buttons on error balloons:** "Push rejected… Click Sync" → Sync Now; "Check your account
+   under Settings" → Open Settings. Hide raw git output behind "Show details".
+10. **What the chips do when clicked:**
+    - ✓ click should only check for new commits (`BackgroundFetchService.checkNow(userAsked=true)`), not a full sync.
+    - ↓ tooltip/text should say it will also push when ahead > 0 ("Pull 3 · push 2").
+11. **One meaning per colour:**
+    - Age stripes move off orange to the pill's purple (`CommitAgeStripes.kt`).
+    - Conflicts are red in the panel too (`GitDashboardPanel`).
+    - Publish and PR chips get different colours.
+12. **Light-theme contrast:** pill text about #5F52A8, orange about #B35C00 (colour scheme
+    XMLs, `ChipBar.textOn`, `TO_PUSH`). Same-commit tint alpha 20 → about 50.
+13. **Badge blink:** `CommitBadges` drops the unpushed list on a repo change (line ~80). Keep it
+    until the new list arrives.
+14. **Status bar width:**
+    - Shorten branch names over 25 characters (full name in the tooltip).
+    - Keep the last good GitHub PR/CI state (dimmed) when a refresh fails, instead of hiding the chips.
+15. **Push consistency:**
+    - Panel "Push" vs "Push…" behave differently.
+    - "Switch Branch…" and "Open Git Dashboard" share an icon.
+    - "Copy GitHub Link to Line" is listed twice in the editor menu (`plugin.xml`).
+16. **Find Action / keymap:** declare Sync, Push and Switch Branch as real actions in
+    `plugin.xml` and reuse them in the panel and chips.
 
-## Next steps
+Then build the zip, send it to the user, and merge the branch into `main` once they're happy.
 
-1. Confirm the crash fix: with a file open, Git → Pull or switch branches; watch for the error popup.
-   If it recurs, the stack trace's line numbers show which build is running.
-2. Click through the fork and expired-sign-in cases above when one is available.
-3. Then pick from the backlog with the user.
+## Backlog (ideas the user liked)
 
-## Ideas the user liked (backlog)
-
-- File summary above line 1
-  ("3 authors · last changed 2 days ago"); scrollbar map of not-committed / not-pushed / new lines.
-- Line history ("how this line changed"), "undo my change to these lines".
-- Commit history list with revert / copy hash / open on GitHub; stash shelf;
-  automatic background fetch; commit message helpers.
-- Possible later: Compose (Jewel) UI — deferred because the Compose compiler plugin is awkward under Maven.
+- File summary above line 1; scrollbar map of not-committed / not-pushed / new lines.
+- Line history, "undo my change to these lines", commit history list, stash shelf, commit message helpers.
+- "2h ago" chip turning amber when there are uncommitted changes and no commit for hours.
+- Background-check interval as a setting.
+- Age stripes are rebuilt on the UI thread after every edit; rebuild them less often in big files.
+- Later: Compose (Jewel) UI (deferred: the Compose compiler plugin is awkward under Maven).
 
 ## Known gotchas
 
-- JBR 25 crashed once in the sandbox (JVM-internal, not plugin code); workaround flag is in
-  `sandbox/idea64.vmoptions`. Report to JetBrains if it recurs with the flag.
-- On 2026-10-17 a restart step closed the user's own IntelliJ by mistake — see the `.pid` rule in `CLAUDE.md`.
+- The 2026-10-19 blame crash fix (file reload) is still not confirmed by a pull or branch switch.
+- JBR 25 crashed once in the sandbox (JVM-internal); workaround flag in `sandbox/idea64.vmoptions`.
+- On 2026-10-17 a restart step closed the user's own IntelliJ: see the `.pid` rule in `CLAUDE.md`.
+- `GitRepositoryFiles.getRootDir()` is the work tree, not `.git`; FETCH_HEAD sits beside `headFile`.
+- In cloud sessions a stop hook asks to commit and push, but CLAUDE.md wins: ask the user first.

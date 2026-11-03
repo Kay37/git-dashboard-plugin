@@ -102,7 +102,7 @@ To find which jar holds a class: loop over `"$IDE"/lib/*.jar` with `unzip -l | g
 
 | Package | What's there |
 |---|---|
-| `git/` | Blocking git operations (call off the EDT): `GitOperations` (commit/push/undo, `runGit`/`tryGit`), `SyncOperations` (fetch+merge/rebase+push, conflicts), `RepoStatus`, `LocalChanges`, `Branches`, `RepositorySetup` (init, remotes) |
+| `git/` | Blocking git operations (call off the EDT): `GitOperations` (commit/push/undo, `runGit`/`tryGit`), `SyncOperations` (fetch+merge/rebase+push, conflicts), `RepoStatus`, `LocalChanges`, `Branches`, `RepositorySetup` (init, remotes), `BackgroundFetch` (quiet fetch every 10 min / on return; shares `fetchLock` with Sync) |
 | `github/` | `GitHubApi` (REST via IntelliJ `HttpRequests` + Gson), `GitHubStatusService` (shared PR/CI state, polling), `GitHubRepositories` (create repo), `GitHubLinks` (URLs, coordinates) |
 | `toolwindow/` | The Git Dashboard panel (`GitDashboardPanel`) and everything it opens: commit section, push dialog, sync/conflict tasks, branch switcher, remotes, publish, pull requests section, create-PR dialog |
 | `blame/` | Inline blame: `InlineBlameManager` (caret tracking, inlay, on-demand same-commit tint), `BlameInlayRenderer` (pill + badges, right-aligned at margin), `BlameCache`, `CommitBadges` (↑ Not pushed / ✦ New), `BlamePopup`, settings/toggles, Copy GitHub link, colour settings page |
@@ -116,5 +116,12 @@ checkout/branch operations (smart checkout). Settings are `PropertiesComponent` 
 
 ## Environment notes
 
-- Windows 11, project inside OneDrive. Git warns about LF→CRLF on every commit; that's normal.
+- Windows 11, project at `C:\Users\kimba\git-dashboard-plugin` (not in OneDrive) (user, 2026-11-03).
+  Git warns about LF→CRLF on every commit; that's normal.
+- When giving the user commands, write them to run from any folder (`git -C '<path>' …`, full script
+  path) (user, 2026-11-03).
+- **Cloud sessions** (no IntelliJ): download `ideaIU-2026.2.3.tar.gz` from download.jetbrains.com,
+  write a Linux copy of `ide-platform/pom.xml` pointing at it, and compile a scratch copy with the
+  bundled `jbr`. `mvn package` there also builds the installable zip to send the user. The session
+  can't reach the user's PC, so they install via Settings → Plugins → ⚙ → Install Plugin from Disk.
 - `gh` CLI is signed in as Kay37; read-only `gh api` calls are handy for checking GitHub response shapes.
