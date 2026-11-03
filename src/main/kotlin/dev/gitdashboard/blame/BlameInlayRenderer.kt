@@ -14,6 +14,7 @@ import java.awt.Font
 import java.awt.FontMetrics
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
 
@@ -74,7 +75,20 @@ class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
         }
     }
 
-    override fun getContextMenuGroupId(inlay: Inlay<*>): String = "GitDashboard.BlameOptions"
+    /**
+     * Right-clicking the pill itself shows the Git Dashboard menu. The blank space before the pill
+     * is part of the inlay too, so a right-click there must get IntelliJ's normal editor menu
+     * (null): otherwise right-clicking anywhere past the end of the line showed this menu instead.
+     */
+    override fun getContextMenuGroupId(inlay: Inlay<*>): String? =
+        if (isOverContent(inlay, inlay.editor.contentComponent.mousePosition)) "GitDashboard.BlameOptions" else null
+
+    /** Whether [point] (editor coordinates) is on the drawn pill or its badges, not the blank space before them. */
+    fun isOverContent(inlay: Inlay<*>, point: Point?): Boolean {
+        val bounds = inlay.bounds ?: return false
+        if (point == null || !bounds.contains(point)) return false
+        return point.x >= bounds.x + bounds.width - contentWidth(inlay.editor)
+    }
 
     /** Width of the pill plus its badges, without the leading gap. */
     private fun contentWidth(editor: Editor): Int {
