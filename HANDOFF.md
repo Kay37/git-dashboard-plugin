@@ -27,42 +27,25 @@ built zip to install from disk. On 2026-11-03 they said they don't want to test 
    - Double-click no longer lights up a commit (Alt+Shift+B does).
    - No pill on uncommitted lines or untracked files.
 
-## Next steps: remaining design items (user asked for all of them, 2026-11-03)
+## Done too: design items 5–16 (`98e0b29`, compile-checked, zip sent to the user)
 
-5. **Balloons:**
-   - No "Synced" balloon when nothing changed (`SyncTask.kt` onSuccess).
-   - A second notification group, `STICKY_BALLOON`, for ERROR/WARNING in `notifyUser`.
-6. **Commit shortcuts** (`CommitSection.kt:106`):
-   - Ctrl+Enter = Commit; Ctrl+Alt+K = Commit & Push.
-   - Update the empty-text hint at :64.
-7. **False green ✓:** when `ahead`/`behind` is null but upstream exists, show a grey
-   "? origin/x — couldn't compare" chip instead of ✓ Synced (`SyncStatusBarWidget.stateChips`).
-8. **One project-wide "sync running" flag** (a service) that the panel and chip both check and
-   show. Today `syncing` is local to the widget.
-9. **Buttons on error balloons:** "Push rejected… Click Sync" → Sync Now; "Check your account
-   under Settings" → Open Settings. Hide raw git output behind "Show details".
-10. **What the chips do when clicked:**
-    - ✓ click should only check for new commits (`BackgroundFetchService.checkNow(userAsked=true)`), not a full sync.
-    - ↓ tooltip/text should say it will also push when ahead > 0 ("Pull 3 · push 2").
-11. **One meaning per colour:**
-    - Age stripes move off orange to the pill's purple (`CommitAgeStripes.kt`).
-    - Conflicts are red in the panel too (`GitDashboardPanel`).
-    - Publish and PR chips get different colours.
-12. **Light-theme contrast:** pill text about #5F52A8, orange about #B35C00 (colour scheme
-    XMLs, `ChipBar.textOn`, `TO_PUSH`). Same-commit tint alpha 20 → about 50.
-13. **Badge blink:** `CommitBadges` drops the unpushed list on a repo change (line ~80). Keep it
-    until the new list arrives.
-14. **Status bar width:**
-    - Shorten branch names over 25 characters (full name in the tooltip).
-    - Keep the last good GitHub PR/CI state (dimmed) when a refresh fails, instead of hiding the chips.
-15. **Push consistency:**
-    - Panel "Push" vs "Push…" behave differently.
-    - "Switch Branch…" and "Open Git Dashboard" share an icon.
-    - "Copy GitHub Link to Line" is listed twice in the editor menu (`plugin.xml`).
-16. **Find Action / keymap:** declare Sync, Push and Switch Branch as real actions in
-    `plugin.xml` and reuse them in the panel and chips.
+- Sticky error/warning balloons; no "Synced" balloon when nothing changed; "Show Details",
+  "Open GitHub Settings" and "Sync Now" buttons.
+- Ctrl+Enter = Commit, Ctrl+Alt+K = Commit & Push.
+- "? origin/x" chip when the comparison fails. Clicking ✓ only checks for new commits. The ↓ chip
+  says when it will also push. Long branch names are shortened.
+- `SyncTracker` (in `SyncTask.kt`) is the project-wide "syncing" state.
+- Colour and contrast fixes; badges and PR/CI chips no longer blink.
+- Sync, Push and Switch Branch are registered actions (`toolwindow/GitDashboardActions.kt`).
 
-Then build the zip, send it to the user, and merge the branch into `main` once they're happy.
+## Next steps
+
+1. The user installs the zip and reports anything wrong. Fix it all in one batch.
+2. Merge `claude/elegant-dijkstra-38q6jz` into `main` once they're happy.
+3. Then pick from the backlog.
+4. Not done from the review:
+   - Panel and chips still use their own buttons rather than the new registered actions.
+   - "Last good" PR/CI chips aren't dimmed.
 
 ## Backlog (ideas the user liked)
 
