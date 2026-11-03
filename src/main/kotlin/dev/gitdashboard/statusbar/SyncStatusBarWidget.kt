@@ -2,17 +2,20 @@ package dev.gitdashboard.statusbar
 
 import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.project.DumbAwareToggleAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -24,11 +27,19 @@ import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
 import com.intellij.ui.awt.RelativePoint
+import com.intellij.util.text.DateFormatUtil
+import com.intellij.vcs.log.impl.HashImpl
+import com.intellij.vcs.log.impl.VcsLogNavigationUtil
+import dev.gitdashboard.blame.relativeTime
+import dev.gitdashboard.git.BackgroundFetchService
+import dev.gitdashboard.git.FetchSettings
+import dev.gitdashboard.git.LastCommit
 import dev.gitdashboard.git.RepoStatus
 import dev.gitdashboard.git.loadRepoStatuses
 import dev.gitdashboard.github.ChecksSummary
 import dev.gitdashboard.github.GitHubState
 import dev.gitdashboard.github.GitHubStatusService
+import dev.gitdashboard.notifyUser
 import dev.gitdashboard.pluralize
 import dev.gitdashboard.refreshRound
 import dev.gitdashboard.toolwindow.publishToGitHub
@@ -43,6 +54,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
@@ -51,6 +63,8 @@ import kotlinx.coroutines.withContext
 import java.awt.Color
 import java.awt.Point
 import java.awt.event.MouseEvent
+import java.util.Date
+import java.util.concurrent.TimeUnit
 import javax.swing.JComponent
 
 class SyncStatusBarWidgetFactory : StatusBarWidgetFactory {
@@ -62,9 +76,11 @@ class SyncStatusBarWidgetFactory : StatusBarWidgetFactory {
 /**
  * Coloured chips in the status bar for the current repository, e.g.
  *
- *   [⎇ main ▾]  [↑ 2]  [↓ 1]
+ *   [⎇ main ▾]  [🕑 2h ago]  [↑ 2]  [↓ 1]
  *
- * The branch chip opens the branch switcher; the ↑ chip pushes; the ↓ / ✓ chips sync. Special
+ * The branch chip opens the branch switcher; the clock chip shows how long ago the last commit
+ * was (click: see it in the Git log); the ↑ chip pushes; the ↓ / ✓ chips sync. ↓ knows about new
+ * GitHub commits because [BackgroundFetchService] checks for them every few minutes. Special
  * states (not published, merge conflict, syncing) get their own chip. Right-click for a menu.
  */
 class SyncStatusBarWidget(private val project: Project, private val scope: CoroutineScope) : CustomStatusBarWidget {
@@ -106,6 +122,15 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
                 refreshRound("the status bar's GitHub chips") { withContext(Dispatchers.EDT) { render() } }
             }
         }
+        // A check that found nothing new changes no refs, so re-read the "last checked" time here.
+        scope.launch { project.service<BackgroundFetchService>().checks.collect { requestRefresh() } }
+        // Keeps "5m ago" and "last checked" counting up while nothing else changes.
+        scope.launch {
+            while (true) {
+                delay(TimeUnit.MINUTES.toMillis(1))
+                refreshRound("the status bar's clock") { withContext(Dispatchers.EDT) { render() } }
+            }
+        }
         requestRefresh()
     }
 
@@ -125,7 +150,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
     private fun render() {
         val status = status
         bar.isVisible = status != null
-        bar.chips = if (status == null) emptyList() else listOf(branchChip(status)) + stateChips(status) + gitHubChips(status.repository)
+        bar.chips = if (status == null) emptyList() else listOf(branchChip(status)) + listOfNotNull(lastCommitChip(status)) + stateChips(status) + gitHubChips(status.repository)
     }
 
     /** "PR #12" for the branch's pull request and a CI chip coloured by its checks, when on GitHub. */
@@ -161,6 +186,52 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         onClick = { event -> openBranchSwitcher(status.repository, event) },
     )
 
+    /** "2h ago" since the commit the branch is on; click to see that commit in IntelliJ's Git log. */
+    private fun lastCommitChip(status: RepoStatus): Chip? {
+        val commit = status.lastCommit ?: return null
+        return Chip(
+            text = shortAge(commit.time),
+            color = NEUTRAL,
+            solid = false,
+            icon = AllIcons.Vcs.History,
+            tooltip = html(
+                "Last commit${status.branch?.let { " on <b>$it</b>" }.orEmpty()}: <b>${relativeTime(Date(commit.time))}</b>" +
+                    " (${DateFormatUtil.formatDateTime(commit.time)})",
+                "“${commit.subject.escapeHtml()}” by ${commit.author.escapeHtml()}",
+                "Click to see it in the Git log.",
+            ),
+            onClick = { showInGitLog(status.repository, commit) },
+        )
+    }
+
+    /** "just now", "5m ago", "3h ago", "2d ago", "3w ago", "4mo ago", "2y ago". */
+    private fun shortAge(time: Long): String {
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(System.currentTimeMillis() - time).coerceAtLeast(0)
+        val hours = minutes / 60
+        val days = hours / 24
+        return when {
+            minutes < 1 -> "just now"
+            minutes < 60 -> "${minutes}m ago"
+            hours < 24 -> "${hours}h ago"
+            days < 7 -> "${days}d ago"
+            days < 30 -> "${days / 7}w ago"
+            days < 365 -> "${days / 30}mo ago"
+            else -> "${days / 365}y ago"
+        }
+    }
+
+    /** Last line of the ↑ / ↓ / ✓ tooltips: when GitHub was last asked for new commits, or why it couldn't be. */
+    private fun lastCheckedLine(status: RepoStatus): String {
+        val check = project.service<BackgroundFetchService>().checks.value[status.repository.root]
+        // A Sync or IntelliJ's own fetch after a failed background check counts as a newer, good check.
+        if (check?.failure != null && (status.lastFetched ?: 0) < check.at) {
+            return "<i>Couldn't check for new commits ${relativeTime(Date(check.at))}: ${check.failure.escapeHtml()}</i>"
+        }
+        val checked = listOfNotNull(status.lastFetched, check?.at).maxOrNull()
+            ?: return "<i>Not checked for new commits yet.</i>"
+        return "<i>Checked for new commits ${relativeTime(Date(checked))}.</i>"
+    }
+
     private fun stateChips(status: RepoStatus): List<Chip> {
         val repo = status.repository
         val ahead = status.ahead ?: 0
@@ -186,16 +257,16 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
                 onClick = { pushWithChoice(project, repo, ::requestRefresh) }))
 
             ahead == 0 && behind == 0 -> listOf(Chip("✓ Synced", SYNCED, solid = false,
-                tooltip = html("Up to date with <b>$upstream</b> as of the last check.", "Click to sync and check for new commits."),
+                tooltip = html("Up to date with <b>$upstream</b>.", lastCheckedLine(status), "Click to sync now."),
                 onClick = { startSync(repo) }))
 
             else -> buildList {
                 if (ahead > 0) add(Chip("↑ $ahead", TO_PUSH, solid = true,
-                    tooltip = html("${pluralize(ahead, "commit")} to push to <b>$upstream</b>.",
+                    tooltip = html("${pluralize(ahead, "commit")} to push to <b>$upstream</b>.", lastCheckedLine(status),
                         if (behind > 0) "Click to sync: pull first, then push." else "Click to push (you can choose which commits)."),
                     onClick = { if (behind > 0) startSync(repo) else pushWithChoice(project, repo, ::requestRefresh) }))
                 if (behind > 0) add(Chip("↓ $behind", TO_PULL, solid = true,
-                    tooltip = html("${pluralize(behind, "commit")} to pull from <b>$upstream</b>.", "Click to sync."),
+                    tooltip = html("${pluralize(behind, "commit")} to pull from <b>$upstream</b>.", lastCheckedLine(status), "Click to sync."),
                     onClick = { startSync(repo) }))
             }
         }
@@ -213,6 +284,25 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
             syncing = false
             render()
             requestRefresh()
+        }
+    }
+
+    /** Opens IntelliJ's Git log with [commit] selected. */
+    private fun showInGitLog(repo: GitRepository, commit: LastCommit) {
+        VcsLogNavigationUtil.jumpToRevisionAsync(project, repo.root, HashImpl.build(commit.hash))
+    }
+
+    /** Refresh from the menu: ask GitHub for new commits now (even if the timer is off), then redraw. */
+    private fun checkNowAndRefresh(repo: GitRepository) {
+        scope.launch {
+            val check = refreshRound("the requested check for new commits") {
+                project.service<BackgroundFetchService>().checkNow(userAsked = true)[repo.root]
+            }
+            requestRefresh()
+            // Asked for, so say if it failed; otherwise the chips themselves are the answer.
+            check?.failure?.let { reason ->
+                withContext(Dispatchers.EDT) { notifyUser(project, NotificationType.WARNING, "Couldn't check for new commits", reason) }
+            }
         }
     }
 
@@ -248,9 +338,18 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
             action("Sync", AllIcons.Actions.CheckOut, enabled = status.upstream != null && !status.operationInProgress) { startSync(repo) },
             action("Push…", AllIcons.Vcs.Push, enabled = status.hasUnpushedCommits && status.hasRemotes) { pushWithChoice(project, repo, ::requestRefresh) },
             action("Switch Branch…", AllIcons.Vcs.Branch) { openBranchSwitcher(repo, event) },
-            action("Refresh", AllIcons.Actions.Refresh) { requestRefresh() },
+            action("Refresh", AllIcons.Actions.Refresh) { checkNowAndRefresh(repo) },
             action("Open Git Dashboard", AllIcons.Vcs.Branch) {
                 ToolWindowManager.getInstance(project).getToolWindow("Git Dashboard")?.show()
+            },
+            Separator.getInstance(),
+            object : DumbAwareToggleAction("Check for New Commits Every ${BackgroundFetchService.INTERVAL_MINUTES} Minutes") {
+                override fun getActionUpdateThread() = ActionUpdateThread.BGT
+                override fun isSelected(e: AnActionEvent) = FetchSettings.autoFetch
+                override fun setSelected(e: AnActionEvent, state: Boolean) {
+                    FetchSettings.autoFetch = state
+                    if (state) scope.launch { refreshRound("the check for new commits") { project.service<BackgroundFetchService>().checkNow() } }
+                }
             },
         )
     }

@@ -24,6 +24,7 @@
                     factoryClass="dev.gitdashboard.toolwindow.GitDashboardToolWindowFactory"/>
         <notificationGroup id="Git Dashboard" displayType="BALLOON"/>
         <postStartupActivity implementation="dev.gitdashboard.blame.InlineBlameStartup"/>
+        <postStartupActivity implementation="dev.gitdashboard.git.BackgroundFetchStartup"/>
         <colorSettingsPage implementation="dev.gitdashboard.blame.BlameColorSettingsPage"/>
         <statusBarWidgetFactory id="GitDashboard.Sync"
                                 implementation="dev.gitdashboard.statusbar.SyncStatusBarWidgetFactory"/>

@@ -24,6 +24,10 @@ data class RepoStatus(
     val conflicts: Int,
     /** Whether any remote (GitHub or otherwise) is configured. */
     val hasRemotes: Boolean,
+    /** The commit the branch is on, or null in a repository with no commits yet. */
+    val lastCommit: LastCommit? = null,
+    /** When the remote was last checked for new commits (epoch millis), or null if never. */
+    val lastFetched: Long? = null,
 ) {
     val name: String get() = repository.root.name
 
@@ -50,8 +54,22 @@ fun loadRepoStatuses(project: Project): List<RepoStatus> =
             state = repo.state,
             conflicts = conflictedPaths(project, repo).size,
             hasRemotes = repo.remotes.isNotEmpty(),
+            lastCommit = lastCommit(project, repo),
+            lastFetched = lastFetchTime(repo),
         )
     }
+
+/** The latest commit on the current branch (HEAD): what "committed 2h ago" in the status bar is about. */
+data class LastCommit(val hash: String, val subject: String, val author: String, /** Epoch millis. */ val time: Long)
+
+/** Null when HEAD has no commit yet (a brand-new repository). */
+internal fun lastCommit(project: Project, repo: GitRepository): LastCommit? {
+    val result = tryGit(project, repo, GitCommand.LOG, "-1", "--format=%H%x1f%ct%x1f%an%x1f%s", "HEAD") { setSilent(true) }
+    if (!result.success()) return null
+    val parts = result.outputAsJoinedString.trim().split('\u001f')
+    val seconds = parts.getOrNull(1)?.toLongOrNull() ?: return null
+    return LastCommit(hash = parts[0], subject = parts.getOrElse(3) { "" }, author = parts.getOrElse(2) { "" }, time = seconds * 1000)
+}
 
 /** Commits ahead of / behind the upstream, or nulls if that can't be determined. */
 internal fun countAheadBehind(project: Project, repo: GitRepository): Pair<Int?, Int?> {

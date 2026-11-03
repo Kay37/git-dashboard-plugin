@@ -9,6 +9,7 @@ import git4idea.commands.Git
 import git4idea.commands.GitCommand
 import git4idea.commands.GitCommandResult
 import git4idea.repo.GitRepository
+import kotlin.concurrent.withLock
 
 // All functions here run git and block: call them from a background task, never on the EDT.
 
@@ -39,7 +40,7 @@ fun syncCurrentBranch(project: Project, repo: GitRepository): SyncResult {
     }
     val upstream = trackInfo.remoteBranch.nameForLocalOperations
 
-    val fetch = Git.getInstance().fetch(repo, trackInfo.remote, emptyList())
+    val fetch = fetchLock.withLock { Git.getInstance().fetch(repo, trackInfo.remote, emptyList()) }
     if (!fetch.success()) throw GitOperationException(explainRemoteFailure(fetch, "Fetch failed."))
     repo.update()
 
