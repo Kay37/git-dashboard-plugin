@@ -61,10 +61,14 @@ class CommitSection(
         lineWrap = true
         wrapStyleWord = true
         border = JBUI.Borders.empty(4, 6)
-        emptyText.text = "Commit message (Ctrl+Enter to commit & push)"
+        emptyText.text = "Commit message (Ctrl+Enter: commit · Ctrl+Alt+K: commit & push)"
     }
-    private val commitButton = JButton("Commit").apply { addActionListener { commit(push = false) } }
+    private val commitButton = JButton("Commit").apply {
+        toolTipText = "Ctrl+Enter"
+        addActionListener { commit(push = false) }
+    }
     private val commitAndPushButton = JButton("Commit & Push").apply {
+        toolTipText = "Ctrl+Alt+K"
         putClientProperty(DarculaButtonUI.DEFAULT_STYLE_KEY, true)
         addActionListener { commit(push = true) }
     }
@@ -103,8 +107,13 @@ class CommitSection(
         messageArea.document.addDocumentListener(object : DocumentAdapter() {
             override fun textChanged(e: DocumentEvent) = updateControls()
         })
-        DumbAwareAction.create { commit(push = true) }.registerCustomShortcutSet(
+        // Same keys as IntelliJ's own commit window, so habit never pushes by accident.
+        DumbAwareAction.create { commit(push = false) }.registerCustomShortcutSet(
             CustomShortcutSet(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK)),
+            messageArea, parentDisposable,
+        )
+        DumbAwareAction.create { commit(push = true) }.registerCustomShortcutSet(
+            CustomShortcutSet(KeyStroke.getKeyStroke(KeyEvent.VK_K, InputEvent.CTRL_DOWN_MASK or InputEvent.ALT_DOWN_MASK)),
             messageArea, parentDisposable,
         )
         updateControls()

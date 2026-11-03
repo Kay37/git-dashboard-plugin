@@ -42,6 +42,7 @@ import dev.gitdashboard.github.GitHubStatusService
 import dev.gitdashboard.notifyUser
 import dev.gitdashboard.pluralize
 import dev.gitdashboard.refreshRound
+import dev.gitdashboard.toolwindow.SyncTracker
 import dev.gitdashboard.toolwindow.publishToGitHub
 import dev.gitdashboard.toolwindow.pushWithChoice
 import dev.gitdashboard.toolwindow.resolveConflicts
@@ -87,7 +88,6 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
     private val bar = ChipBar(onPopupTrigger = ::showMenu).apply { isVisible = false }
     private val refreshRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     @Volatile private var status: RepoStatus? = null
-    private var syncing = false
 
     override fun ID() = ID
 
@@ -120,6 +120,12 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         scope.launch {
             project.service<GitHubStatusService>().states.collect {
                 refreshRound("the status bar's GitHub chips") { withContext(Dispatchers.EDT) { render() } }
+            }
+        }
+        // A sync started anywhere (panel, Find Action) shows here as "Syncing…".
+        scope.launch {
+            project.service<SyncTracker>().running.collect {
+                refreshRound("the status bar's sync state") { withContext(Dispatchers.EDT) { render() } }
             }
         }
         // A check that found nothing new changes no refs, so re-read the "last checked" time here.
@@ -178,13 +184,16 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
     private fun String.escapeHtml() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private fun branchChip(status: RepoStatus) = Chip(
-        text = "${status.branch ?: "detached ${status.detachedAt.orEmpty()}"} ▾",
+        // Long names are shortened so the status bar doesn't balloon; the tooltip has the full name.
+        text = "${shorten(status.branch ?: "detached ${status.detachedAt.orEmpty()}")} ▾",
         color = BRANCH,
         solid = false,
         icon = AllIcons.Vcs.Branch,
         tooltip = html("Branch <b>${status.branch ?: "(detached)"}</b>", "Click to switch, create or delete branches."),
         onClick = { event -> openBranchSwitcher(status.repository, event) },
     )
+
+    private fun shorten(name: String) = if (name.length <= MAX_BRANCH_CHARS) name else name.take(MAX_BRANCH_CHARS - 1) + "…"
 
     /** "2h ago" since the commit the branch is on; click to see that commit in IntelliJ's Git log. */
     private fun lastCommitChip(status: RepoStatus): Chip? {
@@ -238,7 +247,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
         val behind = status.behind ?: 0
         val upstream = status.upstream.orEmpty()
         return when {
-            syncing -> listOf(Chip("Syncing…", NEUTRAL, solid = false, icon = AnimatedIcon.Default.INSTANCE,
+            project.service<SyncTracker>().isSyncing(repo) -> listOf(Chip("Syncing…", NEUTRAL, solid = false, icon = AnimatedIcon.Default.INSTANCE,
                 tooltip = html("Syncing with ${upstream.ifEmpty { "the remote" }}…")))
 
             status.operationInProgress || status.conflicts > 0 -> {
@@ -256,9 +265,16 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
                 tooltip = html("This branch isn't on the remote yet.", "Click to publish it."),
                 onClick = { pushWithChoice(project, repo, ::requestRefresh) }))
 
+            // The count failed (say, the branch was deleted on GitHub): don't claim it's in sync.
+            status.ahead == null || status.behind == null -> listOf(Chip("? $upstream", NEUTRAL, solid = false,
+                tooltip = html("Couldn't compare this branch with <b>$upstream</b>.",
+                    "It may have been deleted on GitHub. Click to check again."),
+                onClick = { checkNowAndRefresh(repo) }))
+
+            // Clicking only checks for new commits; nothing is pulled or pushed.
             ahead == 0 && behind == 0 -> listOf(Chip("✓ Synced", SYNCED, solid = false,
-                tooltip = html("Up to date with <b>$upstream</b>.", lastCheckedLine(status), "Click to sync now."),
-                onClick = { startSync(repo) }))
+                tooltip = html("Up to date with <b>$upstream</b>.", lastCheckedLine(status), "Click to check for new commits now."),
+                onClick = { checkNowAndRefresh(repo) }))
 
             else -> buildList {
                 if (ahead > 0) add(Chip("↑ $ahead", TO_PUSH, solid = true,
@@ -266,7 +282,8 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
                         if (behind > 0) "Click to sync: pull first, then push." else "Click to push (you can choose which commits)."),
                     onClick = { if (behind > 0) startSync(repo) else pushWithChoice(project, repo, ::requestRefresh) }))
                 if (behind > 0) add(Chip("↓ $behind", TO_PULL, solid = true,
-                    tooltip = html("${pluralize(behind, "commit")} to pull from <b>$upstream</b>.", lastCheckedLine(status), "Click to sync."),
+                    tooltip = html("${pluralize(behind, "commit")} to pull from <b>$upstream</b>.", lastCheckedLine(status),
+                        if (ahead > 0) "Click to sync: pull these, then push your ${pluralize(ahead, "commit")}." else "Click to pull them."),
                     onClick = { startSync(repo) }))
             }
         }
@@ -276,16 +293,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
 
     // ---- actions ------------------------------------------------------------------------------
 
-    private fun startSync(repo: GitRepository) {
-        if (syncing) return
-        syncing = true
-        render()
-        syncInBackground(project, repo) {
-            syncing = false
-            render()
-            requestRefresh()
-        }
-    }
+    private fun startSync(repo: GitRepository) = syncInBackground(project, repo, ::requestRefresh)
 
     /** Opens IntelliJ's Git log with [commit] selected. */
     private fun showInGitLog(repo: GitRepository, commit: LastCommit) {
@@ -330,7 +338,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
             object : DumbAwareAction(text, null, icon) {
                 override fun getActionUpdateThread() = ActionUpdateThread.EDT
                 override fun update(e: AnActionEvent) {
-                    e.presentation.isEnabled = enabled && !syncing
+                    e.presentation.isEnabled = enabled && !project.service<SyncTracker>().isSyncing(repo)
                 }
                 override fun actionPerformed(e: AnActionEvent) = run()
             }
@@ -339,7 +347,7 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
             action("Push…", AllIcons.Vcs.Push, enabled = status.hasUnpushedCommits && status.hasRemotes) { pushWithChoice(project, repo, ::requestRefresh) },
             action("Switch Branch…", AllIcons.Vcs.Branch) { openBranchSwitcher(repo, event) },
             action("Refresh", AllIcons.Actions.Refresh) { checkNowAndRefresh(repo) },
-            action("Open Git Dashboard", AllIcons.Vcs.Branch) {
+            action("Open Git Dashboard", AllIcons.Toolwindows.ToolWindowChanges) {
                 ToolWindowManager.getInstance(project).getToolWindow("Git Dashboard")?.show()
             },
             Separator.getInstance(),
@@ -358,13 +366,15 @@ class SyncStatusBarWidget(private val project: Project, private val scope: Corou
 
     companion object {
         const val ID = "GitDashboard.Sync"
+        private const val MAX_BRANCH_CHARS = 25
 
         private val BRANCH = JBColor(Color(0x6E5BD6), Color(0x9D8FEB))
-        private val TO_PUSH = JBColor(Color(0xDB7A1F), Color(0xD9822B))
+        // Light: dark enough for white text to read (about 4.5:1).
+        private val TO_PUSH = JBColor(Color(0xB35C00), Color(0xD9822B))
         private val TO_PULL = JBColor(Color(0x3574F0), Color(0x3F7EE8))
         private val SYNCED = JBColor(Color(0x2E9E4F), Color(0x5FB865))
         private val CONFLICT = JBColor(Color(0xD64545), Color(0xC94F4F))
-        private val PUBLISH = JBColor(Color(0x2A9D8F), Color(0x4DB6AC))
+        private val PUBLISH = JBColor(Color(0x4A6587), Color(0x7F9BBF))
         private val NEUTRAL = JBColor(Color(0x808080), Color(0x9A9A9A))
         private val PULL_REQUEST = JBColor(Color(0x2A9D8F), Color(0x4DB6AC))
         private val CI_RUNNING = JBColor(Color(0xC98A00), Color(0xC9A227))

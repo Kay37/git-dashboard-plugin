@@ -316,7 +316,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         /** Stripes are one highlighter per commit block, so they're fine on much larger files. */
         const val MAX_LINES_FOR_STRIPES = 30_000
 
-        val SAME_COMMIT_BACKGROUND = JBColor(Color(64, 128, 255, 20), Color(90, 150, 255, 24))
+        val SAME_COMMIT_BACKGROUND = JBColor(Color(64, 128, 255, 50), Color(90, 150, 255, 45))
         val SAME_COMMIT_STRIPE = JBColor(Color(64, 128, 255), Color(90, 150, 255))
     }
 }

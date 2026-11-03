@@ -1,5 +1,6 @@
 package dev.gitdashboard.toolwindow
 
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
@@ -36,7 +37,7 @@ fun pushWithChoice(project: Project, repo: GitRepository, onFinished: () -> Unit
             if (dialog.showAndGet()) runPush(project, listOf(repo to dialog.upToCommit), onFinished)
         }
 
-        override fun onThrowable(error: Throwable) = reportPushFailure(project, error, pushedTo = emptyList())
+        override fun onThrowable(error: Throwable) = reportPushFailure(project, error, pushedTo = emptyList(), repo)
     }.queue()
 }
 
@@ -62,14 +63,17 @@ private fun runPush(project: Project, targets: List<Pair<GitRepository, String?>
         override fun onSuccess() =
             notifyUser(project, NotificationType.INFORMATION, "Pushed", "Pushed to ${pushedTo.joinToString()}")
 
-        override fun onThrowable(error: Throwable) = reportPushFailure(project, error, pushedTo)
+        override fun onThrowable(error: Throwable) = reportPushFailure(project, error, pushedTo, targets.first().first)
 
         override fun onFinished() = onFinished()
     }.queue()
 }
 
-private fun reportPushFailure(project: Project, error: Throwable, pushedTo: List<String>) {
+private fun reportPushFailure(project: Project, error: Throwable, pushedTo: List<String>, repo: GitRepository) {
     val reason = (error as? GitOperationException)?.message ?: error.toString()
     val title = if (pushedTo.isEmpty()) "Push failed" else "Pushed to ${pushedTo.joinToString()}, then a push failed"
-    notifyUser(project, NotificationType.ERROR, title, reason)
+    // "The remote has commits you don't have yet. Click Sync…": give them the button it mentions.
+    val actions = if ("Click Sync" in reason) listOf(NotificationAction.createSimpleExpiring("Sync Now") { syncInBackground(project, repo) })
+                  else emptyList()
+    notifyUser(project, NotificationType.ERROR, title, reason, actions)
 }

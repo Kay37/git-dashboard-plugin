@@ -27,7 +27,7 @@ import kotlin.math.ln
  * opens the commit card.
  */
 object CommitAgeStripes {
-    val NEWEST: ColorKey = ColorKey.createColorKey("GIT_DASHBOARD_AGE_NEWEST", JBColor(Color(0xFF7B00), Color(0xFF9A3C)))
+    val NEWEST: ColorKey = ColorKey.createColorKey("GIT_DASHBOARD_AGE_NEWEST", JBColor(Color(0x6E5BD6), Color(0x9D8FEB)))
     val OLDEST: ColorKey = ColorKey.createColorKey("GIT_DASHBOARD_AGE_OLDEST", JBColor(Color(0xD3D7DE), Color(0x4A4F57)))
 
     /** Changes this old (or older) get the fully faded colour. */

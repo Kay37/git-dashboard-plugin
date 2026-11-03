@@ -212,11 +212,11 @@ object BlameColors {
     val COMMIT_ID: TextAttributesKey = TextAttributesKey.createTextAttributesKey("GIT_DASHBOARD_INLINE_BLAME_COMMIT")
 
     /** Used when the colour scheme has no value (e.g. a third-party scheme): soft purple text, teal commit ID. */
-    val DEFAULT_TEXT = JBColor(Color(0x8A7FBF), Color(0x9C8FD6))
-    val DEFAULT_COMMIT_ID = JBColor(Color(0x3E9C9C), Color(0x5DB7B0))
+    val DEFAULT_TEXT = JBColor(Color(0x5F52A8), Color(0x9C8FD6))
+    val DEFAULT_COMMIT_ID = JBColor(Color(0x2B7A7A), Color(0x5DB7B0))
 
     val UNCOMMITTED = JBColor(Color(0xB7791F), Color(0xE0B040))
-    private val NOT_PUSHED = JBColor(Color(0xD9822B), Color(0xF0A35E))
+    private val NOT_PUSHED = JBColor(Color(0xB35C00), Color(0xF0A35E))
     private val NEW = JBColor(Color(0x3574F0), Color(0x5C9DFF))
 
     /** Distinct, readable-with-white-text colours; each author always gets the same one. */

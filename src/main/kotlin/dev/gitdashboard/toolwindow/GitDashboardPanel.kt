@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Font
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -104,6 +105,9 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
     }
 
     private fun subscribeToGitChanges() {
+        // A sync started from the status bar or Find Action shows here as "Syncing…" too.
+        val job = project.service<GitDashboardScope>().cs.launch { project.service<SyncTracker>().running.collect { requestRefresh() } }
+        Disposer.register(this) { job.cancel() }
         val connection = project.messageBus.connect(this)
         connection.subscribe(GitRepository.GIT_REPO_CHANGE, object : GitRepositoryChangeListener {
             override fun repositoryChanged(repository: GitRepository) = requestRefresh()
@@ -165,7 +169,10 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             }
             else {
                 secondaryLabel(syncText(status))
-                if (status.canSync) {
+                if (project.service<SyncTracker>().isSyncing(status.repository)) {
+                    secondaryLabel("Syncing…")
+                }
+                else if (status.canSync) {
                     link("Sync") { syncInBackground(project, status.repository, ::requestRefresh) }
                 }
                 if (status.hasUnpushedCommits) {
@@ -182,7 +189,8 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             if (status.operationInProgress) add("$operation in progress")
             if (status.conflicts > 0) add(pluralize(status.conflicts, "conflict"))
         }.joinToString(" · ")
-        label(text).applyToComponent { foreground = JBColor.ORANGE }
+        // Red, like the status bar's conflict chip: one colour, one meaning.
+        label(text).applyToComponent { foreground = CONFLICT_RED }
 
         val next = when {
             status.conflicts > 0 -> "Resolve"
@@ -194,6 +202,8 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
             link("Abort") { abortWithConfirmation(project, status.repository, ::requestRefresh) }
         }
     }
+
+    private fun isSyncing(status: RepoStatus) = project.service<SyncTracker>().isSyncing(status.repository)
 
     private val RepoStatus.canSync: Boolean get() = branch != null && upstream != null && !operationInProgress
 
@@ -230,14 +240,15 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
         val sync = object : DumbAwareAction("Sync", "Pull remote commits, then push yours", AllIcons.Actions.CheckOut) {
             override fun getActionUpdateThread() = ActionUpdateThread.BGT
             override fun update(e: AnActionEvent) {
-                e.presentation.isEnabled = statuses.any { it.canSync }
+                e.presentation.isEnabled = statuses.any { it.canSync && !isSyncing(it) }
             }
             override fun actionPerformed(e: AnActionEvent) =
-                chooseRepo("Sync", statuses.filter { it.canSync }.map { it.repository }) {
+                chooseRepo("Sync", statuses.filter { it.canSync && !isSyncing(it) }.map { it.repository }) {
                     syncInBackground(project, it, ::requestRefresh)
                 }
         }
-        val push = object : DumbAwareAction("Push", "Push unpushed commits on the current branch", AllIcons.Vcs.Push) {
+        // "…": with more than one commit it asks how many to push.
+        val push = object : DumbAwareAction("Push…", "Push unpushed commits on the current branch", AllIcons.Vcs.Push) {
             override fun getActionUpdateThread() = ActionUpdateThread.BGT
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = statuses.any { it.hasUnpushedCommits }
@@ -329,3 +340,5 @@ class GitDashboardPanel(private val project: Project) : SimpleToolWindowPanel(tr
 
     override fun dispose() = Unit
 }
+
+private val CONFLICT_RED = com.intellij.ui.JBColor(Color(0xD64545), Color(0xC94F4F))

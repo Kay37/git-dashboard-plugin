@@ -3,6 +3,8 @@ package dev.gitdashboard.toolwindow
 import com.intellij.dvcs.repo.Repository
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
@@ -21,6 +23,37 @@ import dev.gitdashboard.pluralize
 import dev.gitdashboard.saveOpenFiles
 import git4idea.GitVcs
 import git4idea.repo.GitRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Which repositories are syncing right now, wherever the sync was started (panel, status bar,
+ * Find Action), so every view can show "Syncing…" and a second sync never starts on top of it.
+ */
+@Service(Service.Level.PROJECT)
+class SyncTracker {
+    private val _running = MutableStateFlow<Set<VirtualFile>>(emptySet())
+    val running: StateFlow<Set<VirtualFile>> = _running.asStateFlow()
+
+    fun isSyncing(repo: GitRepository): Boolean = repo.root in _running.value
+
+    /** Marks [repo] as syncing; false if it already was. */
+    internal fun tryStart(repo: GitRepository): Boolean {
+        while (true) {
+            val current = _running.value
+            if (repo.root in current) return false
+            if (_running.compareAndSet(current, current + repo.root)) return true
+        }
+    }
+
+    internal fun finish(repo: GitRepository) {
+        while (true) {
+            val current = _running.value
+            if (_running.compareAndSet(current, current - repo.root)) return
+        }
+    }
+}
 
 /**
  * Fetches, pulls and pushes [repo]'s current branch. If the pull hits conflicts it pauses and says
@@ -28,6 +61,8 @@ import git4idea.repo.GitRepository
  * it never jumps in front of their typing.
  */
 fun syncInBackground(project: Project, repo: GitRepository, onFinished: () -> Unit = {}) {
+    val tracker = project.service<SyncTracker>()
+    if (!tracker.tryStart(repo)) return
     // A pull rewrites files on disk: save first, so it never lands under unsaved edits.
     saveOpenFiles()
     object : Task.Backgroundable(project, "Syncing ${repo.root.name}", true) {
@@ -38,9 +73,10 @@ fun syncInBackground(project: Project, repo: GitRepository, onFinished: () -> Un
         }
 
         override fun onSuccess() {
+            // Nothing happened: the green ✓ chip already says so, no balloon needed.
+            if (!result.published && result.pulled == 0 && result.pushed == 0) return
             val summary = when {
                 result.published -> "Published to ${result.upstream}."
-                result.pulled == 0 && result.pushed == 0 -> "Already up to date with ${result.upstream}."
                 else -> buildList {
                     if (result.pulled > 0) add("pulled ${pluralize(result.pulled, "commit")}")
                     if (result.pushed > 0) add("pushed ${pluralize(result.pushed, "commit")}")
@@ -54,7 +90,10 @@ fun syncInBackground(project: Project, repo: GitRepository, onFinished: () -> Un
             else notifyUser(project, NotificationType.ERROR, "Sync failed", (error as? GitOperationException)?.message ?: error.toString())
         }
 
-        override fun onFinished() = onFinished()
+        override fun onFinished() {
+            tracker.finish(repo)
+            onFinished()
+        }
     }.queue()
 }
 

@@ -76,8 +76,9 @@ class CommitBadges(private val project: Project, private val cs: CoroutineScope)
     }
 
     private fun onRepositoryChanged(repo: GitRepository) {
-        // Any change (commit, push, fetch) can change what's unpushed: reload lazily.
-        unpushed.remove(repo.root)
+        // Any change (commit, push, fetch) can change what's unpushed. Keep showing the old list
+        // until the new one is in, so "↑ Not pushed" doesn't blink off and on.
+        if (unpushed.containsKey(repo.root)) loadUnpushed(repo) { onChanged() }
 
         val previous = lastSeen[repo.root]
         remember(repo)

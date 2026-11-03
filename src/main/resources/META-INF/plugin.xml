@@ -23,6 +23,8 @@
                     icon="AllIcons.Vcs.Branch"
                     factoryClass="dev.gitdashboard.toolwindow.GitDashboardToolWindowFactory"/>
         <notificationGroup id="Git Dashboard" displayType="BALLOON"/>
+        <!-- Errors and warnings stay until closed. -->
+        <notificationGroup id="Git Dashboard Problems" displayType="STICKY_BALLOON"/>
         <postStartupActivity implementation="dev.gitdashboard.blame.InlineBlameStartup"/>
         <postStartupActivity implementation="dev.gitdashboard.git.BackgroundFetchStartup"/>
         <colorSettingsPage implementation="dev.gitdashboard.blame.BlameColorSettingsPage"/>
@@ -64,8 +66,15 @@
                 class="dev.gitdashboard.blame.CopyGitHubLinkAction"
                 text="Copy GitHub Link to Line"
                 description="Copy a permanent GitHub link to the selected lines">
-            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <add-to-group group-id="GitDashboard.BlameOptions" anchor="first"/>
         </action>
+
+        <!-- Main actions, so Find Action finds them and Settings > Keymap can give them shortcuts. -->
+        <action id="GitDashboard.SyncAction" class="dev.gitdashboard.toolwindow.SyncAction"
+                text="Git Dashboard: Sync" description="Pull new commits from GitHub, then push yours"/>
+        <action id="GitDashboard.PushAction" class="dev.gitdashboard.toolwindow.PushAction"
+                text="Git Dashboard: Push…" description="Push this branch's unpushed commits"/>
+        <action id="GitDashboard.SwitchBranchAction" class="dev.gitdashboard.toolwindow.SwitchBranchAction"
+                text="Git Dashboard: Switch Branch…" description="Switch, create or delete branches"/>
     </actions>
 </idea-plugin>

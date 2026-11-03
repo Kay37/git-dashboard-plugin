@@ -100,8 +100,12 @@ class GitHubStatusService(private val project: Project, private val cs: Coroutin
                     val repos = GitRepositoryManager.getInstance(project).repositories
                     // An answer that can't be read (say, a Wi-Fi sign-in page instead of GitHub) fails that
                     // repository's round only; the loop keeps going and the next refresh tries again.
+                    // A failed refresh (Wi-Fi blip) keeps the last good PR / CI chips rather than hiding them.
+                    val previous = _states.value
                     _states.value = repos.associate { repo ->
-                        repo.root to (refreshRound("GitHub status of ${repo.root.name}") { load(repo) } ?: unreadable(repo))
+                        val fresh = refreshRound("GitHub status of ${repo.root.name}") { load(repo) } ?: unreadable(repo)
+                        val lastGood = previous[repo.root] as? GitHubState.Ready
+                        repo.root to if (fresh is GitHubState.Failed && lastGood != null) lastGood else fresh
                     }
                 }
             }
