@@ -12,7 +12,6 @@ import com.intellij.openapi.editor.InlayProperties
 import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
-import com.intellij.openapi.editor.event.EditorMouseEventArea
 import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.editor.event.EditorMouseMotionListener
 import com.intellij.openapi.editor.event.VisibleAreaEvent
@@ -48,9 +47,10 @@ import java.awt.event.MouseEvent
 
 /**
  * Draws the editor decorations for the line under the caret: the blame text at the end of the
- * line, and a tint on every other line that came from the same commit. Only the caret line of the
- * focused editor is decorated, and only once the caret settles. The focused editor also gets
- * commit-age stripes in the gutter for the whole file.
+ * line, and (on request) a tint on every other line that came from the same commit. Only the caret
+ * line of the focused editor is decorated, and only once the caret settles. Lines you've changed
+ * since the last commit get no blame text: IntelliJ's gutter already marks them. The focused
+ * editor also gets commit-age stripes in the gutter for the whole file.
  */
 @Service(Service.Level.PROJECT)
 class InlineBlameManager(private val project: Project, private val cs: CoroutineScope) : Disposable {
@@ -145,7 +145,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
             BlameLine.Uncommitted -> described
         }
 
-        // The whole-commit tint is on demand (double-click or shortcut) and lasts while the caret
+        // The whole-commit tint is on demand (Alt+Shift+B or the menu) and lasts while the caret
         // stays on that commit's lines; moving to another commit's line drops it.
         val hash = (blame as? BlameLine.Committed)?.hash
         if (editor.getUserData(HIGHLIGHT_REQUESTED) == true) {
@@ -156,7 +156,8 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
             editor.putUserData(HIGHLIGHTED_COMMIT, null)
         }
 
-        showInlay(editor, caretLine, blame)
+        // No pill on uncommitted lines (or files git doesn't track): it followed you around while typing.
+        showInlay(editor, caretLine, blame as? BlameLine.Committed)
         showSameCommitLines(editor, annotation, lines, editor.getUserData(HIGHLIGHTED_COMMIT))
     }
 
@@ -167,9 +168,10 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         update(editor)
     }
 
-    private fun showInlay(editor: Editor, line: Int, blame: BlameLine) {
+    /** Puts the pill for [blame] at the end of [line], replacing any other; null just removes it. */
+    private fun showInlay(editor: Editor, line: Int, blame: BlameLine?) {
         val existing = editor.getUserData(INLAY)
-        if (BlameSettings.inlineBlame && existing != null && existing.isValid &&
+        if (BlameSettings.inlineBlame && blame != null && existing != null && existing.isValid &&
             editor.document.getLineNumber(existing.offset) == line && existing.renderer.blame == blame) {
             existing.update()
             return
@@ -177,7 +179,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
 
         existing?.let(Disposer::dispose)
         editor.putUserData(INLAY, null)
-        if (!BlameSettings.inlineBlame) return
+        if (!BlameSettings.inlineBlame || blame == null) return
 
         // Right after a reload the line table can still point past the end of the new text. Try again shortly.
         val offset = editor.document.getLineEndOffset(line)
@@ -267,8 +269,16 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.putUserData(HIGHLIGHT_REQUESTED, null)
     }
 
-    private fun blameUnderMouse(e: EditorMouseEvent): BlameLine.Committed? =
-        (e.inlay?.renderer as? BlameInlayRenderer)?.blame as? BlameLine.Committed
+    /**
+     * The blame pill under the mouse. Only the drawn pill and its badges count: the blank space
+     * before the pill is part of the inlay too, and clicks there are meant for the code.
+     */
+    private fun blameUnderMouse(e: EditorMouseEvent): BlameLine.Committed? {
+        val inlay = e.inlay ?: return null
+        val renderer = inlay.renderer as? BlameInlayRenderer ?: return null
+        if (!renderer.isOverContent(inlay, e.mouseEvent.point)) return null
+        return renderer.blame as? BlameLine.Committed
+    }
 
     private fun updateCursor(e: EditorMouseEvent) {
         val editor = e.editor as? EditorEx ?: return
@@ -276,16 +286,9 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         editor.setCustomCursor(this, if (blameUnderMouse(e) != null) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) else null)
     }
 
+    /** A left click on the pill opens the commit card; other buttons are left to IntelliJ (right-click: menu). */
     private fun onClick(e: EditorMouseEvent) {
-        if (e.editor.project != project) return
-        // Double-clicking code lights up its commit. Not consumed, so the word still gets selected.
-        if (e.mouseEvent.clickCount == 2 && e.mouseEvent.button == MouseEvent.BUTTON1 &&
-            e.area == EditorMouseEventArea.EDITING_AREA && e.inlay == null) {
-            e.editor.putUserData(HIGHLIGHTED_COMMIT, null)
-            e.editor.putUserData(HIGHLIGHT_REQUESTED, true)
-            update(e.editor)
-            return
-        }
+        if (e.editor.project != project || e.mouseEvent.button != MouseEvent.BUTTON1) return
         val blame = blameUnderMouse(e) ?: return
         val file = FileDocumentManager.getInstance().getFile(e.editor.document) ?: return
         val repo = GitRepositoryManager.getInstance(project).getRepositoryForFileQuick(file) ?: return
@@ -305,7 +308,7 @@ class InlineBlameManager(private val project: Project, private val cs: Coroutine
         val AGE_STRIPES = Key.create<CommitLines>("gitDashboard.ageStripes")
         /** Commit whose lines are lit up on request, while the caret stays on it. */
         val HIGHLIGHTED_COMMIT = Key.create<String>("gitDashboard.highlightedCommit")
-        /** Set by a double-click or the shortcut; the next update resolves it to the caret line's commit. */
+        /** Set by Alt+Shift+B or the menu; the next update resolves it to the caret line's commit. */
         val HIGHLIGHT_REQUESTED = Key.create<Boolean>("gitDashboard.highlightRequested")
 
         /** Scanning every line on each caret move is cheap for normal files; skip huge ones. */

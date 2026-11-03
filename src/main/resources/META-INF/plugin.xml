@@ -42,7 +42,7 @@
             <action id="GitDashboard.ToggleCommitLineMarks"
                     class="dev.gitdashboard.blame.ToggleCommitLineMarksAction"
                     text="Allow Lighting Up a Commit's Lines"
-                    description="Let a double-click or Alt+Shift+B tint every line from the same commit"/>
+                    description="Let Alt+Shift+B tint every line from the same commit"/>
             <action id="GitDashboard.ToggleAgeStripes"
                     class="dev.gitdashboard.blame.ToggleAgeStripesAction"
                     text="Show Commit Age Stripes in the Gutter"

@@ -22,7 +22,11 @@ import dev.gitdashboard.saveOpenFiles
 import git4idea.GitVcs
 import git4idea.repo.GitRepository
 
-/** Fetches, pulls and pushes [repo]'s current branch; opens the merge dialog if the pull hits conflicts. */
+/**
+ * Fetches, pulls and pushes [repo]'s current branch. If the pull hits conflicts it pauses and says
+ * so (balloon and status bar chip); the merge dialog opens only when the user clicks Resolve, so
+ * it never jumps in front of their typing.
+ */
 fun syncInBackground(project: Project, repo: GitRepository, onFinished: () -> Unit = {}) {
     // A pull rewrites files on disk: save first, so it never lands under unsaved edits.
     saveOpenFiles()
@@ -46,7 +50,7 @@ fun syncInBackground(project: Project, repo: GitRepository, onFinished: () -> Un
         }
 
         override fun onThrowable(error: Throwable) {
-            if (error is SyncConflictException) resolveConflicts(project, repo, onFinished)
+            if (error is SyncConflictException) notifySyncPaused(project, repo, onFinished)
             else notifyUser(project, NotificationType.ERROR, "Sync failed", (error as? GitOperationException)?.message ?: error.toString())
         }
 
@@ -76,21 +80,24 @@ private fun finishThenSync(project: Project, repo: GitRepository, onFinished: ()
         override fun onSuccess() = syncInBackground(project, repo, onFinished)
 
         override fun onThrowable(error: Throwable) {
-            if (error is SyncConflictException) {
-                notifyUser(
-                    project, NotificationType.WARNING, "Sync paused: conflicts to resolve",
-                    "Resolve the conflicts in ${repo.root.name} to finish syncing, or abort to go back to how things were.",
-                    actions = listOf(
-                        NotificationAction.createSimpleExpiring("Resolve Conflicts") { resolveConflicts(project, repo, onFinished) },
-                        NotificationAction.createSimpleExpiring("Abort") { abortWithConfirmation(project, repo, onFinished) },
-                    ),
-                )
-            }
+            if (error is SyncConflictException) notifySyncPaused(project, repo, onFinished)
             else notifyUser(project, NotificationType.ERROR, "Couldn't finish syncing", (error as? GitOperationException)?.message ?: error.toString())
         }
 
         override fun onFinished() = onFinished()
     }.queue()
+}
+
+/** Says the sync stopped on conflicts, with buttons to resolve them (opens the merge dialog) or abort. */
+private fun notifySyncPaused(project: Project, repo: GitRepository, onFinished: () -> Unit) {
+    notifyUser(
+        project, NotificationType.WARNING, "Sync paused: conflicts to resolve",
+        "Resolve the conflicts in ${repo.root.name} to finish syncing, or abort to go back to how things were.",
+        actions = listOf(
+            NotificationAction.createSimpleExpiring("Resolve Conflicts") { resolveConflicts(project, repo, onFinished) },
+            NotificationAction.createSimpleExpiring("Abort") { abortWithConfirmation(project, repo, onFinished) },
+        ),
+    )
 }
 
 /** Asks, then aborts the in-progress merge or rebase, restoring the branch to its state before the pull. */

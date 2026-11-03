@@ -24,8 +24,8 @@ import java.awt.RenderingHints
  *
  *   ( (K) Kay37, 2 days ago • Fix rounding  •  #14 a1a9423 )  ( ↑ Not pushed )  ( ✦ New )
  *
- * The circle holds the author's initials in a colour fixed per author. Edited lines get an amber
- * pill instead. Text colours come from Settings > Editor > Color Scheme > Git Dashboard.
+ * The circle holds the author's initials in a colour fixed per author. Edited lines get no pill
+ * (see [InlineBlameManager]). Text colours come from Settings > Editor > Color Scheme > Git Dashboard.
  */
 class BlameInlayRenderer(val blame: BlameLine) : EditorCustomElementRenderer {
 
