@@ -1,6 +1,11 @@
-# Hand-off — state as of 2026-11-03
+# Hand-off — state as of 2026-11-04
 
 Read `CLAUDE.md` first (build commands, conventions, user preferences, code map).
+
+## Wolfwood (separate plugin, no repo yet) — 2026-11-04
+
+A second plugin (forest theme + tree spirits) lives in its own repo, `Kay37/wolfwood` (`main`,
+`95b0f36`): design pages plus its own `HANDOFF.md`. Nothing in this repo is for Wolfwood.
 
 ## Where the code is
 
